@@ -1,0 +1,26 @@
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Docker / Ollama local storage (in case you change named volumes to local folders)
+.ollama/
+ollama_data/
+models/
+blobs/
+
+# Local configuration & secrets
+.env
+.env.*
+!.env.example
+
+# Temporary files and logs
+*.log
+*.tmp
+*.resolved
+Modelfile.resolved
+
+# Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo

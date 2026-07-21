@@ -1,0 +1,40 @@
+# ── Build context ────────────────────────────────────────────────────────────
+# Keep the Docker build context lean — only send what's needed to the daemon
+
+# Version control
+.git
+.gitignore
+
+# CI/CD (not needed inside image)
+.gitlab-ci.yml
+
+# Documentation (not needed inside image)
+README.md
+*.md
+# Exception: keep skills markdown files
+!skills/
+!skills/*.md
+
+# macOS artifacts
+.DS_Store
+**/.DS_Store
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Node (if any tooling added later)
+node_modules/
+
+# Temp files
+*.tmp
+*.log
+/tmp/
