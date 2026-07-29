@@ -19,7 +19,7 @@ MODEL_NAME="${MODEL_NAME:-doc-compiler}"
 SKILLS_DIR="${SKILLS_DIR:-/root/skills}"
 MODELFILE_TEMPLATE="${MODELFILE_TEMPLATE:-/root/Modelfile.template}"
 MODELFILE_RESOLVED="/tmp/Modelfile.resolved"
-API_URL="http://localhost:11434"
+API_URL="http://localhost:11435"
 MAX_WAIT_SECS=120
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -36,7 +36,8 @@ echo "╚═══════════════════════�
 echo ""
 
 # ── 1. Start Ollama in the background ────────────────────────────────────────
-log "Starting Ollama server..."
+log "Starting Ollama server on internal port 11435..."
+export OLLAMA_HOST="127.0.0.1:11435"
 ollama serve &
 OLLAMA_PID=$!
 
@@ -80,26 +81,30 @@ log "Loading skills from: ${SKILLS_DIR}"
 SKILLS_CONTENT=""
 SKILLS_COUNT=0
 
-# Always load skills.md first (primary, canonical skill file)
+# Always load skills.md first (primary, canonical skill file) if it exists
 if [ -f "${SKILLS_DIR}/skills.md" ]; then
     SKILLS_CONTENT=$(cat "${SKILLS_DIR}/skills.md")
     SKILLS_COUNT=$((SKILLS_COUNT + 1))
     log "  ✓ skills.md"
-else
-    warn "Primary skills.md not found in ${SKILLS_DIR}"
 fi
 
-# Load additional skills-*.md files in alphabetical order
+# Load all other *.md files containing "skills" in the name (excluding skills.md itself)
 while IFS= read -r -d '' skill_file; do
     FILENAME=$(basename "$skill_file")
-    SKILLS_CONTENT="${SKILLS_CONTENT}
+    if [ "$FILENAME" != "skills.md" ]; then
+        if [ -z "$SKILLS_CONTENT" ]; then
+            SKILLS_CONTENT=$(cat "$skill_file")
+        else
+            SKILLS_CONTENT="${SKILLS_CONTENT}
 
 ---
 
 $(cat "$skill_file")"
-    SKILLS_COUNT=$((SKILLS_COUNT + 1))
-    log "  ✓ ${FILENAME}"
-done < <(find "${SKILLS_DIR}" -maxdepth 1 -name 'skills-*.md' -print0 2>/dev/null | sort -z)
+        fi
+        SKILLS_COUNT=$((SKILLS_COUNT + 1))
+        log "  ✓ ${FILENAME}"
+    fi
+done < <(find "${SKILLS_DIR}" -maxdepth 1 -name '*skills*.md' -print0 2>/dev/null | sort -z)
 
 # Fallback if no skills found at all
 if [ "$SKILLS_COUNT" -eq 0 ]; then
@@ -141,6 +146,12 @@ else
     exit 1
 fi
 
+# Start the FastAPI Gateway
+log "Starting API Gateway on port 11434..."
+export OLLAMA_BACKEND="http://127.0.0.1:11435"
+python3 -m uvicorn --app-dir /root gateway:app --host 0.0.0.0 --port 11434 &
+GATEWAY_PID=$!
+
 # ── Ready ─────────────────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
@@ -153,5 +164,5 @@ printf  "║  %-52s ║\n" "Skills:     ${SKILLS_COUNT} file(s) loaded"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 
-# Keep the container alive by waiting on ollama serve
-wait "$OLLAMA_PID"
+# Keep the container alive by waiting on both Ollama and Gateway
+wait -n "$OLLAMA_PID" "$GATEWAY_PID"

@@ -90,6 +90,23 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+### Chat with Markdown/Text File Upload (cURL)
+
+You can send `.md`, `.markdown`, or `.txt` files directly to the custom `/v1/chat/with-file` endpoint:
+
+```bash
+curl -X POST http://localhost:11434/v1/chat/with-file \
+  -F "file=@/path/to/your-document.md" \
+  -F "message=Summarize this document in Indonesian." \
+  -F "stream=false"
+```
+
+Parameters:
+- `file`: The `.md`, `.markdown`, or `.txt` file to upload (required).
+- `message`: Your prompt/question about the document (required).
+- `stream`: Set to `true` to stream the response (default: `false`).
+- `temperature`: Control sampling temperature (default: `0.2`).
+
 ### List available models
 ```bash
 curl http://localhost:11434/v1/models | jq .

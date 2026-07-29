@@ -17,7 +17,7 @@ if [[ "${1:-}" == "--rebuild" ]]; then
 fi
 
 API_URL="http://localhost:11434"
-MAX_WAIT_SECS=300  # 5 minutes — first run downloads ~2.5 GB model
+MAX_WAIT_SECS=500  # 5 minutes — first run downloads ~2.5 GB model
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 log()  { echo "  $*"; }

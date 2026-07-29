@@ -24,3 +24,10 @@ Modelfile.resolved
 .idea/
 *.swp
 *.swo
+
+#skills
+skills/
+skillsbackup/
+
+#docs
+docs.md
