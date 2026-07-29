@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════
-# setup.sh — One-time setup for new users
+# setup.sh — One-time setup for new users (llama.cpp build)
 #
 # Usage:
 #   ./setup.sh            # Standard setup
@@ -16,8 +16,8 @@ if [[ "${1:-}" == "--rebuild" ]]; then
     REBUILD=true
 fi
 
-API_URL="http://localhost:11434"
-MAX_WAIT_SECS=500  # 5 minutes — first run downloads ~2.5 GB model
+API_URL="http://localhost:11435"
+MAX_WAIT_SECS=500  # 5 minutes — first run downloads ~2.0 GB model
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 log()  { echo "  $*"; }
@@ -29,7 +29,7 @@ header() { echo ""; echo "── $* ──────────────�
 # ── Banner ───────────────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════╗"
-echo "║     Document Compiler LLM — First Setup     ║"
+echo "║  Document Compiler LLM (llama.cpp) — Setup  ║"
 echo "╚══════════════════════════════════════════════╝"
 
 # ── Check prerequisites ───────────────────────────────────────────────────────
@@ -49,14 +49,13 @@ if ! docker compose version &> /dev/null; then
 fi
 ok "Docker Compose found: $(docker compose version --short)"
 
-# Check if Docker daemon is running
 if ! docker info &> /dev/null; then
     err "Docker daemon is not running. Please start Docker and try again."
     exit 1
 fi
 ok "Docker daemon is running"
 
-# ── Check for GPU (informational only) ────────────────────────────────────────
+# ── Check for GPU ─────────────────────────────────────────────────────────────
 header "Hardware detection"
 if nvidia-smi &> /dev/null && docker info 2>/dev/null | grep -q "nvidia"; then
     GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
@@ -65,13 +64,13 @@ if nvidia-smi &> /dev/null && docker info 2>/dev/null | grep -q "nvidia"; then
     USE_GPU=true
     COMPOSE_FILES="-f docker-compose.yml -f docker-compose.gpu.yml"
 elif [[ "$(uname -m)" == "arm64" ]] && [[ "$(uname)" == "Darwin" ]]; then
-    ok "Apple Silicon detected — Metal GPU acceleration will be used by Ollama automatically"
+    ok "Apple Silicon detected — CPU/Metal acceleration will be used by llama.cpp"
 else
-    warn "No GPU detected — running in CPU-only mode"
-    log "Inference speed: ~5-15 tokens/second (adequate for document tasks)"
+    warn "No GPU detected — running in CPU mode"
+    log "Inference speed: ~5-15 tokens/second"
 fi
 
-# ── Build or pull image ───────────────────────────────────────────────────────
+# ── Build image ───────────────────────────────────────────────────────────────
 header "Setting up Docker image"
 
 if [ "$REBUILD" = true ]; then
@@ -79,33 +78,20 @@ if [ "$REBUILD" = true ]; then
     docker compose $COMPOSE_FILES build --no-cache
     ok "Image rebuilt"
 else
-    REGISTRY_IMAGE=$(docker compose $COMPOSE_FILES config --images 2>/dev/null | head -1 || echo "")
-
-    if [[ "$REGISTRY_IMAGE" == registry.gitlab.com* ]]; then
-        log "Attempting to pull from GitLab registry..."
-        if docker compose $COMPOSE_FILES pull 2>/dev/null; then
-            ok "Image pulled from registry"
-        else
-            warn "Registry pull failed — building locally..."
-            docker compose $COMPOSE_FILES build
-            ok "Image built locally"
-        fi
-    else
-        log "Building image locally..."
-        docker compose $COMPOSE_FILES build
-        ok "Image built"
-    fi
+    log "Building image locally..."
+    docker compose $COMPOSE_FILES build
+    ok "Image built"
 fi
 
-# ── Start the service ─────────────────────────────────────────────────────────
+# ── Start service ─────────────────────────────────────────────────────────────
 header "Starting LLM service"
-log "Starting container..."
+log "Starting container doc-compiler-llama..."
 docker compose $COMPOSE_FILES up -d
 ok "Container started"
 
 # ── Wait for model to be ready ────────────────────────────────────────────────
 header "Waiting for model to be ready"
-log "This may take several minutes on first run (downloading ~2.5 GB model)..."
+log "This may take several minutes on first run (downloading ~2.0 GB model)..."
 log "You can watch progress in another terminal with: docker compose logs -f llm"
 echo ""
 
@@ -124,7 +110,7 @@ until curl -sf "${API_URL}/v1/models" > /dev/null 2>&1; do
         err "Service did not become ready within ${MAX_WAIT_SECS} seconds."
         echo ""
         echo "  Troubleshooting:"
-        echo "    docker compose logs llm     # See what's happening"
+        echo "    docker compose logs llm     # See container logs"
         echo "    docker compose ps           # Check container status"
         exit 1
     fi
@@ -142,25 +128,17 @@ done
 echo ""
 echo ""
 
-# ── Verify model is available ──────────────────────────────────────────────────
-MODEL_LIST=$(curl -sf "${API_URL}/v1/models" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-models = [m['id'] for m in data.get('data', [])]
-print(', '.join(models))
-" 2>/dev/null || echo "unknown")
-
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║            ✅  Setup Complete!                          ║"
+echo "║         ✅  Setup Complete! (llama.cpp)                 ║"
 echo "╠══════════════════════════════════════════════════════════╣"
-printf "║  %-56s ║\n" "API URL:   http://localhost:11434/v1"
-printf "║  %-56s ║\n" "Model:     doc-compiler"
+printf "║  %-56s ║\n" "API URL:   http://localhost:11435/v1"
+printf "║  %-56s ║\n" "Model:     doc-compiler (skills injected)"
+printf "║  %-56s ║\n" "Base Model: qwen2.5:3b"
 printf "║  %-56s ║\n" "API Key:   any string (e.g. 'local')"
-printf "║  %-56s ║\n" "Available: ${MODEL_LIST}"
 echo "╠══════════════════════════════════════════════════════════╣"
 echo "║  Quick test:                                            ║"
-echo "║    curl http://localhost:11434/v1/chat/completions \\    ║"
+echo "║    curl http://localhost:11435/v1/chat/completions \\    ║"
 echo "║      -H 'Content-Type: application/json' \\             ║"
 echo '║      -d '"'"'{"model":"doc-compiler","stream":false,       ║'
 echo '║           "messages":[{"role":"user",                   ║'
@@ -172,5 +150,5 @@ echo "    docker compose logs -f llm      # Follow logs"
 echo "    docker compose stop             # Stop the service"
 echo "    docker compose start            # Start again"
 echo "    docker compose restart          # Restart (reload skills)"
-echo "    docker stats doc-compiler-llm   # Monitor memory usage"
+echo "    docker stats doc-compiler-llama # Monitor memory usage"
 echo ""

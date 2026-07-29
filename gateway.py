@@ -1,16 +1,151 @@
 import os
+import glob
+import time
 import httpx
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 
 app = FastAPI(
-    title="Document Compiler LLM Gateway",
-    description="Gateway to handle Markdown file uploads and proxy requests to Ollama",
-    version="1.0.0"
+    title="Document Compiler LLM Gateway (llama.cpp)",
+    description="Gateway to handle Markdown file uploads, skills system prompt injection, and proxy requests to llama-server",
+    version="2.0.0"
 )
 
-# Ollama internally runs on port 11435 inside the container
-OLLAMA_URL = os.environ.get("OLLAMA_BACKEND", "http://127.0.0.1:11435")
+# llama-server runs internally on port 8080 inside the container
+LLAMA_URL = os.environ.get("LLAMA_BACKEND", "http://127.0.0.1:8080")
+SKILLS_DIR = os.environ.get("SKILLS_DIR", "/root/skills")
+
+def load_skills_prompt() -> str:
+    """Auto-discover and concatenate skills.md and any skills-*.md or *skills*.md files."""
+    skills_files = []
+    
+    # 1. Primary skill file
+    primary_skill = os.path.join(SKILLS_DIR, "skills.md")
+    if os.path.isfile(primary_skill):
+        skills_files.append(primary_skill)
+
+    # 2. Additional skill files (*skills*.md or skills-*.md), excluding primary
+    additional_patterns = [
+        os.path.join(SKILLS_DIR, "*skills*.md"),
+        os.path.join(SKILLS_DIR, "skills-*.md")
+    ]
+    discovered = set()
+    for pattern in additional_patterns:
+        for filepath in glob.glob(pattern):
+            if os.path.isfile(filepath) and os.path.abspath(filepath) != os.path.abspath(primary_skill):
+                discovered.add(filepath)
+                
+    skills_files.extend(sorted(list(discovered)))
+
+    if not skills_files:
+        return "You are a helpful document assistant. Help users read, understand, summarize, and compile documents."
+
+    contents = []
+    for sf in skills_files:
+        try:
+            with open(sf, "r", encoding="utf-8") as f:
+                text = f.read().strip()
+                if text:
+                    contents.append(text)
+        except Exception as e:
+            print(f"[Gateway] Warning: Failed to read skill file {sf}: {e}")
+
+    return "\n\n---\n\n".join(contents)
+
+# Cache skills system prompt on startup
+SKILLS_SYSTEM_PROMPT = load_skills_prompt()
+
+@app.on_event("startup")
+def startup_event():
+    global SKILLS_SYSTEM_PROMPT
+    SKILLS_SYSTEM_PROMPT = load_skills_prompt()
+    print(f"[Gateway] Skills system prompt loaded ({len(SKILLS_SYSTEM_PROMPT)} characters)")
+
+@app.get("/v1/models")
+async def list_models():
+    """Return OpenAI compatible model list with doc-compiler and qwen2.5:3b."""
+    now = int(time.time())
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "doc-compiler",
+                "object": "model",
+                "created": now,
+                "owned_by": "local"
+            },
+            {
+                "id": "qwen2.5:3b",
+                "object": "model",
+                "created": now,
+                "owned_by": "local"
+            }
+        ]
+    }
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    """Intercept chat completions to inject skills prompt for 'doc-compiler' model."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    model_requested = body.get("model", "doc-compiler")
+    messages = body.get("messages", [])
+
+    # If model is doc-compiler (or default), inject skills prompt
+    if model_requested in ["doc-compiler", "doc-compiler-llama", "default"] or not model_requested:
+        skills_msg = {"role": "system", "content": SKILLS_SYSTEM_PROMPT}
+        
+        # Check if first message is already system role
+        if messages and messages[0].get("role") == "system":
+            # Prepend skills instructions to existing system message
+            messages[0]["content"] = f"{SKILLS_SYSTEM_PROMPT}\n\n{messages[0].get('content', '')}"
+        else:
+            # Insert skills prompt at the start
+            messages.insert(0, skills_msg)
+
+    body["messages"] = messages
+    stream = body.get("stream", False)
+    headers = {"Content-Type": "application/json"}
+
+    if stream:
+        async def event_generator():
+            async with httpx.AsyncClient(timeout=600.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{LLAMA_URL}/v1/chat/completions",
+                    json=body,
+                    headers=headers,
+                    timeout=600.0
+                ) as r:
+                    if r.status_code >= 400:
+                        err_body = await r.aread()
+                        yield f"Error: {err_body.decode('utf-8')}".encode("utf-8")
+                        return
+                    async for chunk in r.aiter_bytes():
+                        yield chunk
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+    else:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            try:
+                r = await client.post(
+                    f"{LLAMA_URL}/v1/chat/completions",
+                    json=body,
+                    headers=headers,
+                    timeout=600.0
+                )
+                r.raise_for_status()
+                res_data = r.json()
+                # Rewrite model name in response to match requested alias
+                if isinstance(res_data, dict):
+                    res_data["model"] = model_requested
+                return res_data
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error connecting to llama-server: {str(e)}")
 
 @app.post("/v1/chat/with-file")
 async def chat_with_file(
@@ -35,7 +170,7 @@ async def chat_with_file(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
         
-    # 3. Construct chat message with context document injected
+    # 3. Construct user prompt with document injected
     prompt_content = f"Context Document ({filename}):\n\n{file_content}\n\nUser Prompt:\n{message}"
     
     payload = {
@@ -49,52 +184,61 @@ async def chat_with_file(
     
     headers = {"Content-Type": "application/json"}
     
-    # 4. Send to Ollama
+    # 4. Process via chat_completions logic (injects skills)
     if stream:
         async def event_generator():
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(timeout=600.0) as client:
+                # Prepare payload with skills injection
+                skills_msg = {"role": "system", "content": SKILLS_SYSTEM_PROMPT}
+                payload["messages"].insert(0, skills_msg)
+                
                 async with client.stream(
                     "POST",
-                    f"{OLLAMA_URL}/v1/chat/completions",
+                    f"{LLAMA_URL}/v1/chat/completions",
                     json=payload,
                     headers=headers,
-                    timeout=300.0
+                    timeout=600.0
                 ) as r:
                     if r.status_code >= 400:
-                        yield f"Error: {await r.aread()}".encode("utf-8")
+                        err_body = await r.aread()
+                        yield f"Error: {err_body.decode('utf-8')}".encode("utf-8")
                         return
                     async for chunk in r.aiter_bytes():
                         yield chunk
         return StreamingResponse(event_generator(), media_type="text/event-stream")
     else:
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        skills_msg = {"role": "system", "content": SKILLS_SYSTEM_PROMPT}
+        payload["messages"].insert(0, skills_msg)
+        
+        async with httpx.AsyncClient(timeout=600.0) as client:
             try:
                 r = await client.post(
-                    f"{OLLAMA_URL}/v1/chat/completions",
+                    f"{LLAMA_URL}/v1/chat/completions",
                     json=payload,
                     headers=headers,
-                    timeout=300.0
+                    timeout=600.0
                 )
                 r.raise_for_status()
-                return r.json()
+                res_data = r.json()
+                if isinstance(res_data, dict):
+                    res_data["model"] = model
+                return res_data
             except httpx.HTTPStatusError as e:
                 raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error connecting to Ollama: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Error connecting to llama-server: {str(e)}")
 
-# Catch-all proxy route to forward all other requests (completions, models listing, etc.)
+# Catch-all proxy route to forward all other requests (completions, health, etc.)
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def wildcard_proxy(path: str, request: Request):
-    url = f"{OLLAMA_URL}/{path}"
+    url = f"{LLAMA_URL}/{path}"
     headers = dict(request.headers)
-    
-    # Remove host header so httpx calculates it properly for the destination
     headers.pop("host", None)
     
     body = await request.body()
     params = request.query_params
     
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=600.0) as client:
         try:
             req = client.build_request(
                 method=request.method,
@@ -105,7 +249,6 @@ async def wildcard_proxy(path: str, request: Request):
             )
             resp = await client.send(req, stream=True)
             
-            # Forward relevant response headers, omitting hop-by-hop & encoding headers
             exclude_headers = {"content-encoding", "content-length", "transfer-encoding", "connection", "keep-alive"}
             resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in exclude_headers}
             
@@ -122,4 +265,4 @@ async def wildcard_proxy(path: str, request: Request):
                 headers=resp_headers
             )
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Proxy error connecting to Ollama: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Proxy error connecting to llama-server: {str(e)}")
