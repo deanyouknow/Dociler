@@ -1,11 +1,12 @@
 # Dociler
 
-Dociler is a planned local-first terminal assistant for reading, searching,
+Dociler is a local-first terminal assistant in development for reading, searching,
 comparing, summarizing, and drafting universal documents with either a local
 LLM or a user-configured OpenAI-compatible API.
 
-> **Project status:** Planning complete; implementation has not started. This
-> repository intentionally contains documentation only.
+> **Project status:** Implementation has begun. The Rust CLI foundation provides
+> help, version, and basic workspace diagnostics. Chat and document analysis are
+> not implemented yet.
 
 The first release is scoped to word-processing documents: Markdown (`.md`),
 PDF (`.pdf`), modern and legacy Word (`.docx`, `.doc`), Rich Text Format
@@ -36,7 +37,14 @@ The eventual repository will provide `install.sh` for macOS/Linux and
 and release metadata. A compatible `llama.cpp` runtime and the selected model
 will be downloaded later, only if the user chooses local mode during onboarding.
 
-No installer or application implementation exists yet.
+The installer is not implemented yet. Developers can run the CLI foundation:
+
+```sh
+cargo run --locked -- --help
+cargo run --locked -- doctor
+```
+
+See [Development](docs/development.md) for toolchain setup, builds, and checks.
 
 ## Documentation
 
@@ -52,13 +60,13 @@ No installer or application implementation exists yet.
 - [Security and privacy](docs/security-and-privacy.md)
 - [Testing and release gates](docs/testing-and-release.md)
 - [Architecture decisions](docs/decisions.md)
+- [Development and implementation milestones](docs/development.md)
 
 ## Resuming development
 
 Before making changes, read `AGENTS.md`, `IMPLEMENTATION_PLAN.md`, and
-`CHECKPOINT.md`, followed by the documents relevant to the task. The next
-authorized implementation step is to scaffold the Rust workspace and GitHub
-Actions; it must not begin without explicit implementation authorization.
+`CHECKPOINT.md`, followed by the documents relevant to the task. Implementation
+has been authorized; the checkpoint tracks the current milestone and next task.
 
 Every agent that makes meaningful progress must update `CHECKPOINT.md` before
 handing off. The checkpoint is the canonical answer to “what is done, what was
@@ -73,4 +81,4 @@ documentation reset. It is recoverable from the annotated Git tag
 
 ## License
 
-Dociler is planned as an Apache-2.0 project. See [LICENSE](LICENSE).
+Dociler is licensed under Apache-2.0. See [LICENSE](LICENSE).

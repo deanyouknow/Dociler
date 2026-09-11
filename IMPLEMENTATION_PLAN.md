@@ -1,8 +1,8 @@
 # Dociler v1 Implementation Plan
 
-This is the approved, decision-complete plan. It describes future work; none of
-the application behavior below is implemented in the current documentation-only
-repository.
+This is the approved v1 product plan. Implementation has begun with the Rust
+workspace and CLI foundation. This document describes the target behavior;
+consult `CHECKPOINT.md` for what is implemented and verified.
 
 ## 1. Fixed product decisions
 

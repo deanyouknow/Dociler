@@ -127,6 +127,9 @@ If neither passes, do not publish that stable tier.
 
 ## Current baseline
 
-There is presently no application or test suite. Documentation/link/repository
-validation is the only meaningful check for milestone M0. Future agents must not
-report application tests as passed until executable code and tests exist.
+M1 introduces a Rust executable and CLI integration tests covering help/version,
+non-interactive startup, invalid arguments, diagnostics, and absence of workspace
+writes. The CI definition runs native builds/tests across five OS/architecture
+combinations. See `CHECKPOINT.md` for actual local and hosted verification results;
+the existence of a workflow is not evidence that it has run. Later product and
+release gates above remain outstanding.

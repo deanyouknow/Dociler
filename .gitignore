@@ -1,0 +1,24 @@
+# Build and development tools
+/target/
+**/__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Private local state and downloaded assets; never commit these.
+.env
+.env.*
+!.env.example
+.dociler/
+/models/
+/runtimes/
+/exports/
+/transcripts/
+*.gguf
+*.safetensors
+*.log
+*.partial
+*.tmp
+

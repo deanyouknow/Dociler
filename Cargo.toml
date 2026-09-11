@@ -1,0 +1,27 @@
+[workspace]
+members = ["crates/dociler", "crates/dociler-core"]
+default-members = ["crates/dociler"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/deanyouknow/llm-docs"
+publish = false
+
+[workspace.dependencies]
+dociler-core = { path = "crates/dociler-core" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
