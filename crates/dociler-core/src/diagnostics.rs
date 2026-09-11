@@ -3,6 +3,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::workspace::Workspace;
+
 /// Facts about the executable's platform and a caller-selected directory.
 #[derive(Debug)]
 pub struct Diagnostics {
@@ -16,16 +18,10 @@ impl Diagnostics {
     ///
     /// This is not a file-access permission grant or an inference readiness test.
     pub fn inspect(workspace: &Path) -> io::Result<Self> {
-        let workspace = workspace.canonicalize()?;
-        if !workspace.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "workspace must be a directory",
-            ));
-        }
+        let workspace = Workspace::open(workspace)?;
 
         Ok(Self {
-            workspace,
+            workspace: workspace.root().to_owned(),
             operating_system: std::env::consts::OS,
             architecture: std::env::consts::ARCH,
         })

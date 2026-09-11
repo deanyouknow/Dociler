@@ -151,6 +151,14 @@ ordinary questions it retrieves only the most relevant chunks within budget.
 - Background API state: user-level service registration and non-secret metadata;
   bearer token remains in the credential store.
 
+The M2 foundation implements these boundaries in `dociler-core` with separate
+`config`, `paths`, `workspace`, `session`, and `credentials` modules. Configuration
+initialization/loading is implemented; grant updates and native credential
+adapters are not. The session container has no network, parser, or serialization
+dependency in its API. See [Configuration](configuration.md) for the implemented
+schema and limits. This foundation is not yet the complete request orchestrator
+or document filesystem sandbox.
+
 ## Failure containment
 
 - Parser crash/timeout affects only the worker and produces a per-file error.

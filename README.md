@@ -5,8 +5,9 @@ comparing, summarizing, and drafting universal documents with either a local
 LLM or a user-configured OpenAI-compatible API.
 
 > **Project status:** Implementation has begun. The Rust CLI foundation provides
-> help, version, and basic workspace diagnostics. Chat and document analysis are
-> not implemented yet.
+> help, version, workspace diagnostics, and validated settings with explicit
+> initialization. Session/permission foundations are in place; chat and document
+> analysis are not implemented yet.
 
 The first release is scoped to word-processing documents: Markdown (`.md`),
 PDF (`.pdf`), modern and legacy Word (`.docx`, `.doc`), Rich Text Format
@@ -42,6 +43,8 @@ The installer is not implemented yet. Developers can run the CLI foundation:
 ```sh
 cargo run --locked -- --help
 cargo run --locked -- doctor
+cargo run --locked -- config paths
+cargo run --locked -- config show
 ```
 
 See [Development](docs/development.md) for toolchain setup, builds, and checks.
@@ -61,6 +64,7 @@ See [Development](docs/development.md) for toolchain setup, builds, and checks.
 - [Testing and release gates](docs/testing-and-release.md)
 - [Architecture decisions](docs/decisions.md)
 - [Development and implementation milestones](docs/development.md)
+- [Configuration reference](docs/configuration.md)
 
 ## Resuming development
 

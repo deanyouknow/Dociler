@@ -3,9 +3,16 @@
 ## Current implementation
 
 M1 provides a Cargo workspace, a basic executable, shared diagnostics, CLI
-integration tests, and GitHub Actions. The application has no external crate
-dependencies yet. Chat, TUI onboarding, configuration persistence, inference,
-document processing, and serving remain future work.
+integration tests, and GitHub Actions. M2 adds OS paths, validated JSON settings,
+explicit no-clobber initialization, canonical workspace policy lookup, bounded
+memory-only sessions, and a credential-store interface. Native keychain adapters,
+chat, TUI onboarding, inference, document processing, and serving remain future
+work. See [Configuration](configuration.md) for commands, schema, and boundaries.
+
+Direct dependencies are pinned: directories 6.0.0, Serde 1.0.219, serde_json
+1.0.140, tempfile 3.19.1, and zeroize 1.8.1. The lockfile pins transitives. These
+are deliberate Rust-1.85-compatible baseline pins, not claims to be the latest
+releases. Dependency vulnerability/license audits remain release work.
 
 ## Prerequisites
 
@@ -29,6 +36,8 @@ From the repository root:
 cargo run --locked -- --help
 cargo run --locked -- --version
 cargo run --locked -- doctor
+cargo run --locked -- config paths
+cargo run --locked -- config show
 cargo build --release --locked
 ```
 
@@ -38,18 +47,21 @@ Bare invocation currently prints help even in a terminal; the planned TUI will
 replace this during a later milestone.
 
 `doctor` reports a canonical workspace path, OS, architecture, and current
-development capabilities. It reads directory metadata only. It does not inspect
-document contents, start services, persist settings, or test memory/GPU readiness.
+development capabilities. It reads directory metadata and validates saved
+settings if present. It does not inspect document contents, start services,
+persist settings, or test memory/GPU readiness.
 Its exit status means the diagnostic command completed, not that inference is
-available. Help/version exit with 0; invalid arguments with 2; diagnostic/output
-errors with 1. Broken output pipes exit quietly.
+available. Help/version exit with 0; invalid arguments with 2; diagnostic,
+configuration, and output errors with 1. Broken output pipes exit quietly.
+Only `config init` writes configuration, explicitly and without overwriting.
 
 ## Workspace boundaries
 
 - `crates/dociler`: process entrypoint, CLI parsing/output, executable integration
   tests; future terminal and transport adapters belong here initially.
 - `crates/dociler-core`: shared services independent of TUI/HTTP. Diagnostics is
-  the first service. Add substantive modules as features arrive rather than
+  accompanied by config, paths, workspace, session, and credential modules.
+  Add substantive modules as features arrive rather than
   empty placeholder crates for every subsystem.
 - `scripts/check_docs.py`: development-only handoff document checks.
 - `.github/workflows/ci.yml`: native build/test matrix and quality checks.

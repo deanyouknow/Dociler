@@ -20,6 +20,7 @@ impl Workspace {
     fn run(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_dociler"))
             .current_dir(&self.0)
+            .env("DOCILER_CONFIG_DIR", self.0.join("settings"))
             .args(args)
             .stdin(Stdio::null())
             .output()
@@ -111,6 +112,74 @@ fn diagnostics_reject_a_file_as_workspace() {
     fs::write(&file, "data").unwrap();
     assert!(dociler_core::diagnostics::Diagnostics::inspect(&file).is_err());
     assert!(dociler_core::diagnostics::Diagnostics::inspect(&workspace.0.join("missing")).is_err());
+}
+
+#[test]
+fn config_inspection_creates_nothing_and_init_is_explicit() {
+    let workspace = Workspace::new();
+    for args in [["config", "paths"], ["config", "show"]] {
+        let output = workspace.run(&args);
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+    }
+    let output = workspace.run(&["config", "init"]);
+    assert!(output.status.success());
+    let file = workspace.0.join("settings/config.json");
+    let before = fs::read(&file).unwrap();
+    let output = workspace.run(&["config", "init"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("Nothing overwritten")
+    );
+    assert_eq!(fs::read(&file).unwrap(), before);
+    let output = workspace.run(&["doctor"]);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("schema v1 (validated)"));
+    assert!(text.contains("read-only"));
+    assert!(text.contains("memory only"));
+}
+
+#[test]
+fn invalid_saved_config_blocks_inspection_without_disclosing_its_contents() {
+    let workspace = Workspace::new();
+    assert!(workspace.run(&["config", "init"]).status.success());
+    let file = workspace.0.join("settings/config.json");
+    let bytes = br#"{"schema_version":1,"api_key":"private-test-value"}"#;
+    fs::write(&file, bytes).unwrap();
+    for args in [vec!["doctor"], vec!["config", "show"]] {
+        let output = workspace.run(&args);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains("No defaults substituted"));
+        assert!(!error.contains("private-test-value"));
+    }
+    // Help and path recovery commands still work with broken config.
+    assert!(workspace.run(&["--help"]).status.success());
+    assert!(workspace.run(&["config", "paths"]).status.success());
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+}
+
+#[test]
+fn config_override_must_be_absolute() {
+    let workspace = Workspace::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_dociler"))
+        .current_dir(&workspace.0)
+        .env("DOCILER_CONFIG_DIR", "relative-secret-value")
+        .args(["config", "init"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        !String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("relative-secret-value")
+    );
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
 }
 
 #[cfg(unix)]

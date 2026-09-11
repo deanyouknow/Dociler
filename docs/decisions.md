@@ -123,3 +123,19 @@ the protocol in `AGENTS.md`.
 **Why:** The project may pass between AI agents. A canonical current-state and
 append-only activity record prevents chat context from becoming the only source
 of truth and makes incomplete verification visible.
+
+## ADR-012: Strict settings and memory-only session foundation
+
+**Decision:** Use a bounded schema-v1 JSON file in the OS-local configuration
+directory, with explicit no-clobber initialization, unknown-field rejection, and
+exact canonical workspace grant lookup. Keep session messages and credentials
+out of serializable configuration types. Native credential adapters are a
+separate next-stage integration and must not fall back to plaintext files.
+
+**Why:** A small, testable schema gives safe missing-file defaults while making
+invalid security settings visible. OS-local paths avoid roaming write grants;
+explicit initialization avoids startup writes. JSON/Serde supplies structured
+validation without a custom settings parser. See [Configuration](configuration.md).
+
+**Rejected:** Workspace-local settings auto-loading, silently resetting corrupt
+settings, unbounded persistent history, and permissive keychain fallbacks.

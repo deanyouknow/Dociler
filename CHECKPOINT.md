@@ -1,18 +1,20 @@
 # Project Checkpoint
 
-Last updated: 2026-09-11T16:40:57Z
+Last updated: 2026-09-11T16:54:06Z
 
 ## Current status
 
-**Status:** Rust/CLI foundation implemented and locally verified; hosted CI pending.
+**Status:** M2 configuration/session foundation implemented and locally verified; hosted CI pending.
 
-**Active milestone:** M1 — Rust workspace and CI foundation (hosted validation pending).
+**Active milestone:** M2 — Configuration and session state (hosted validation pending).
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
-`dociler` executable with help, version, and basic read-only workspace/platform
-diagnostics. It has no TUI, chat, document parsing, model/runtime integration,
-configuration persistence, or API yet. The five-platform CI workflow is defined
-but has not been run on GitHub from this environment.
+`dociler` executable with help, version, workspace/platform diagnostics, config
+inspection, and explicit default-settings initialization. It includes canonical
+workspace policy lookup, bounded memory-only session types, and a credential
+interface. It has no TUI, chat, document parsing, model/runtime integration,
+native credential adapter, settings/grant update UI, or API yet. The five-platform
+CI workflow is defined but has not been run on GitHub from this environment.
 
 ## Completed
 
@@ -31,18 +33,33 @@ but has not been run on GitHub from this environment.
 - Added GitHub Actions quality/native build checks and Dependabot configuration.
 - Added persistent documentation checks, development instructions, and ignores
   for build outputs, local state, model weights, and private exports.
+- Added M2 core modules for OS paths, strict schema-v1 JSON settings, exact
+  canonical workspace grants, bounded ephemeral sessions, and redacted secrets.
+- Added `config paths`, `config show`, and `config init`; doctor now validates
+  settings and reports current policy. Inspection creates no state. Initialization
+  publishes a private default file without overwriting existing work.
+- Added 14 tests for M2 (20 total on Linux), including malformed/oversized config,
+  concurrent initialization, privacy, symlinks, permissions, workspace identity,
+  session limits/clearing, and unavailable credential-store behavior.
+- Rebuilt and smoke-tested the Linux release executable; documented the schema,
+  commands, limitations, pinned dependencies, and ADR-012.
 
 ## Work in progress
 
-No code changes in progress. M1 hosted CI/native execution remains unverified.
+No code changes in progress. M1/M2 hosted CI/native execution remains unverified.
+Native keychain adapters and settings/grant update operations remain future
+integration, not implicitly implemented by the M2 types.
 
 ## Next recommended task
 
-Run the new CI workflow when these changes reach GitHub. Continue with M2:
-configuration/session types, canonical workspace identity, OS data paths,
-credential-store boundary, and read-only permission defaults with focused tests.
-Implementation is already authorized; no additional product decision is needed
-for this task. Do not persist prompts/documents or download models as part of M2.
+Run the CI workflow when these changes reach GitHub. Begin M3 with remote profile
+and endpoint validation, native credential-store integration, and mock-server
+tests; then connect onboarding and streaming remote text chat to the session
+container. Implement HTTPS/private-address rules and redirect policy before
+sending user content. Keep remote secrets out of settings and make missing OS
+keychain availability explicit. Document transmission/consent and local models
+remain later work; no model downloads are needed for this next task.
+Implementation is already authorized; no additional product decision is needed.
 
 ## Blockers
 
@@ -70,8 +87,39 @@ rustup setup described in `docs/development.md` on other machines.
   No third-party runtime crate dependencies in M1.
 - Rust 1.85.1 is the reproducible initial toolchain (edition 2024, MSRV 1.85).
   Update it deliberately with dependency/toolchain changes.
+- ADR-012: bounded versioned JSON, OS-local config/data paths, no startup writes,
+  exact workspace grant identity, and no plaintext credential fallback.
+- M2 direct dependency pins are documented in `docs/development.md`; transitives
+  are locked. Remote profiles/schema migration are not introduced prematurely.
+- Session cap: 1 MiB of text / 512 messages, reject overflow without evicting old
+  messages. This is not the future inference tokenizer/context budget.
 
 ## Verification
+
+### M2 — 2026-09-11
+
+Local Rust commands use the same isolated toolchain environment as M1 below.
+
+- **passed:** `cargo fmt --all -- --check`.
+- **passed:** `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`.
+- **passed:** `cargo test --workspace --all-targets --locked --offline`: 20 tests
+  (9 executable/service tests and 11 core foundation tests).
+- **passed:** `cargo test --workspace --all-targets --release --locked --offline`:
+  the same 20 tests against optimized code, including isolated `config init`.
+- **passed:** `cargo test --workspace --doc --locked --offline`: no doctests yet.
+- **passed:** `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked --offline`.
+- **passed:** `cargo build --workspace --release --locked --offline`; release
+  `doctor`, `config paths`, and `config show` smoke runs. No real-user config
+  initialized; all initialization tests use isolated temporary directories.
+- **passed:** `python3 scripts/check_docs.py`: 15 Markdown files, 19 relative
+  links, title/heading/fence checks, and README coverage.
+- **passed:** `git diff --check` and final working-tree review.
+- **failed:** initial sandboxed `cargo check --workspace` dependency download
+  due to blocked DNS; **passed:** authorized network retry, followed by offline
+  checks. Only Rust crate dependencies downloaded, no models/inference runtime.
+- **not run:** hosted CI, macOS/Windows/Linux ARM64 execution, Windows ACL/native
+  keychain validation, vulnerability/license audits, and all later feature/model/
+  installer/release qualification gates. Local results do not complete those gates.
 
 ### M1 — 2026-09-11
 
@@ -127,3 +175,5 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-09T03:03:43Z | Codex `/root` | Documentation-only reset | Tagged legacy state, removed implementation, and created the Dociler handoff package | Repository-wide documentation reset | Tag, tree, Markdown, coverage, and diff checks passed; application tests not run because none exist | COMPLETE | Await explicit authorization before scaffolding Rust or CI |
 | 2026-09-11T16:32:10Z | Codex `/root` | Begin M1 after user authorization | Prepare Rust workspace, CLI entrypoint, checks, and CI; starting tree clean | Cargo manifests, crates, workflows, development docs, README, checkpoint | Verification pending; Rust absent from PATH | IN PROGRESS | Build and verify the foundation |
 | 2026-09-11T16:40:57Z | Codex `/root` | M1 local implementation and verification | Added runnable CLI/core, six tests, toolchain/lockfile, CI, documentation checker, ignores, and development handoff; resolves prior in-progress entry | Cargo manifests/lock, rust-toolchain.toml, crates/, .github/, .gitignore, scripts/check_docs.py, README, implementation plan, development/testing docs, checkpoint | passed: fmt, Clippy, six tests, docs, release build/smoke, document links, static YAML, ignore and diff checks; not run: hosted CI and later feature/release gates | LOCAL WORK COMPLETE; HOSTED VALIDATION PENDING | Run hosted CI and begin M2 configuration/session foundation |
+| 2026-09-11T16:45:07Z | Codex `/root` | Begin authorized M2 continuation | Add settings/path/workspace/session services, credential interface, CLI config inspection/init, tests and handoff; clean starting tree | Cargo manifests/lock, crates/, README, docs/, CHECKPOINT.md | not run: M2 checks pending | IN PROGRESS | Implement and verify M2 without model downloads or document persistence |
+| 2026-09-11T16:54:06Z | Codex `/root` | M2 local implementation and verification | Added strict private config/init, OS paths, canonical grant policy, memory-only sessions, credential boundary, CLI commands, 14 new tests, schema docs and ADR-012; resolves prior in-progress entry | Cargo.toml/lock, core manifest/modules/tests, CLI/tests, README, docs/configuration.md, architecture/development/testing/decisions docs, CHECKPOINT.md | passed: fmt, Clippy, 20 debug and 20 release test executions, Rust docs, release build/smoke, Markdown and diff; failed: initial sandbox dependency DNS, resolved by authorized retry; not run: hosted/platform/keychain/audit/later release gates | LOCAL WORK COMPLETE; HOSTED VALIDATION PENDING | Run hosted CI; begin M3 remote profile validation and credential adapters before onboarding/streaming chat |

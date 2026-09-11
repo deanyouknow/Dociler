@@ -129,7 +129,12 @@ If neither passes, do not publish that stable tier.
 
 M1 introduces a Rust executable and CLI integration tests covering help/version,
 non-interactive startup, invalid arguments, diagnostics, and absence of workspace
-writes. The CI definition runs native builds/tests across five OS/architecture
+writes. M2 adds settings defaults/schema/size/privacy checks, atomic no-clobber
+initialization (including concurrent attempts), exact workspace-grant lookup,
+Unix symlink/permission negatives, session limits/clearing, credential redaction
+and fail-closed unavailability, and CLI initialization/recovery checks. Tests use
+temporary paths and child-only config overrides; no developer settings are
+modified. The CI definition runs native builds/tests across five OS/architecture
 combinations. See `CHECKPOINT.md` for actual local and hosted verification results;
 the existence of a workflow is not evidence that it has run. Later product and
 release gates above remain outstanding.

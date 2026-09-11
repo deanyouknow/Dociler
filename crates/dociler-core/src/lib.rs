@@ -1,7 +1,11 @@
 //! Shared Dociler services, independent of terminal rendering and HTTP transport.
 //!
-//! This first milestone provides filesystem diagnostics only. Document access,
-//! configuration, inference, and permission grants will be added as bounded
-//! services instead of being coupled to the CLI.
+//! Configuration contains only preferences and approved workspace identities;
+//! session content and credentials are deliberately not serializable settings.
 
+pub mod config;
+pub mod credentials;
 pub mod diagnostics;
+pub mod paths;
+pub mod session;
+pub mod workspace;
