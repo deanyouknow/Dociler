@@ -6,7 +6,8 @@ LLM or a user-configured OpenAI-compatible API.
 
 > **Project status:** Implementation has begun. The Rust CLI foundation provides
 > help, version, workspace diagnostics, and validated settings with explicit
-> initialization. Session/permission foundations are in place; chat and document
+> initialization. Remote OpenAI-compatible profile verification and streamed
+> one-shot text chat are available. The TUI, local inference, and document
 > analysis are not implemented yet.
 
 The first release is scoped to word-processing documents: Markdown (`.md`),
@@ -45,9 +46,11 @@ cargo run --locked -- --help
 cargo run --locked -- doctor
 cargo run --locked -- config paths
 cargo run --locked -- config show
+cargo run --locked -- connect list
 ```
 
 See [Development](docs/development.md) for toolchain setup, builds, and checks.
+See [Remote providers](docs/remote-providers.md) for the first working chat path.
 
 ## Documentation
 
@@ -65,6 +68,7 @@ See [Development](docs/development.md) for toolchain setup, builds, and checks.
 - [Architecture decisions](docs/decisions.md)
 - [Development and implementation milestones](docs/development.md)
 - [Configuration reference](docs/configuration.md)
+- [Remote providers and text chat](docs/remote-providers.md)
 
 ## Resuming development
 

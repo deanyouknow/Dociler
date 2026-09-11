@@ -139,3 +139,21 @@ validation without a custom settings parser. See [Configuration](configuration.m
 
 **Rejected:** Workspace-local settings auto-loading, silently resetting corrupt
 settings, unbounded persistent history, and permissive keychain fallbacks.
+
+## ADR-013: Pinned remote origin and native-only credentials
+
+**Decision:** Build the first upstream adapter with Reqwest/rustls, no ambient
+proxy, no redirects, and DNS addresses pinned for each client lifetime. Require
+HTTPS publicly and allow HTTP only when all resolved addresses are private or
+loopback. Store optional keys through keyring-backed native credential services;
+use a pure-Rust Secret Service transport on Linux.
+
+**Why:** The same remote flow must eventually carry sensitive documents. Origin
+validation must precede that feature, and provider keys must never need a
+plaintext compatibility fallback. Model listing plus minimal generation catches
+more incompatible endpoints than a health probe alone. See
+[Remote providers](remote-providers.md).
+
+**Rejected:** Automatic redirects, environment-proxy inheritance, public HTTP,
+URL-embedded credentials, API keys in JSON, and Linux integrations requiring a
+development `libdbus` package.

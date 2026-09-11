@@ -134,7 +134,10 @@ initialization (including concurrent attempts), exact workspace-grant lookup,
 Unix symlink/permission negatives, session limits/clearing, credential redaction
 and fail-closed unavailability, and CLI initialization/recovery checks. Tests use
 temporary paths and child-only config overrides; no developer settings are
-modified. The CI definition runs native builds/tests across five OS/architecture
+modified. M3 adds strict URL/plaintext policy tests; mock OpenAI models,
+generation, redirect, malformed/incomplete SSE, response-limit, bearer-auth,
+Unicode streaming, profile round-trip, and executable add/list/run coverage.
+Loopback tests bind only an ephemeral `127.0.0.1` port. The CI definition runs native builds/tests across five OS/architecture
 combinations. See `CHECKPOINT.md` for actual local and hosted verification results;
 the existence of a workflow is not evidence that it has run. Later product and
 release gates above remain outstanding.

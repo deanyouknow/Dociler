@@ -39,6 +39,14 @@ removed on success, error, cancellation, disconnect, and next-start recovery.
 - Protect against DNS rebinding and redirect-based transition from a private to
   public endpoint or vice versa.
 
+The first M3 remote client enforces the transport subset before any request: it
+requires HTTPS except for all-private/all-loopback DNS results, pins resolved
+addresses into a proxy-free client, disables redirects, bounds response parsing,
+and emits sanitized error classes. See [Remote providers](remote-providers.md).
+Document content cannot enter this path yet. Cross-platform DNS/TLS/keychain
+runtime validation and redirect/rebinding adversarial coverage remain release
+gates rather than implied guarantees.
+
 ## Filesystem containment
 
 - Canonicalize workspace and candidate paths immediately before access to reduce

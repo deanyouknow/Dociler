@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::paths::AppPaths;
+use crate::remote::RemoteProfile;
 use crate::workspace::{Workspace, WritePolicy};
 
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
@@ -36,6 +37,7 @@ pub struct Settings {
     schema_version: u32,
     preferred_local_profile: LocalProfile,
     write_workspaces: Vec<PathBuf>,
+    remote_profiles: Vec<RemoteProfile>,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +48,8 @@ struct RawSettings {
     preferred_local_profile: LocalProfile,
     #[serde(default)]
     write_workspaces: Vec<PathBuf>,
+    #[serde(default)]
+    remote_profiles: Vec<RemoteProfile>,
 }
 
 impl Default for Settings {
@@ -54,6 +58,7 @@ impl Default for Settings {
             schema_version: 1,
             preferred_local_profile: LocalProfile::Lite,
             write_workspaces: Vec::new(),
+            remote_profiles: Vec::new(),
         }
     }
 }
@@ -65,7 +70,10 @@ impl Settings {
         }
         // Never expose serde errors: they may include a secret inserted into a bad field.
         let settings: RawSettings = serde_json::from_slice(bytes).map_err(|_| invalid_config())?;
-        if settings.schema_version != 1 || settings.write_workspaces.len() > 256 {
+        if settings.schema_version != 1
+            || settings.write_workspaces.len() > 256
+            || settings.remote_profiles.len() > 32
+        {
             return Err(invalid_config());
         }
         for path in &settings.write_workspaces {
@@ -73,10 +81,22 @@ impl Settings {
                 return Err(invalid_config());
             }
         }
+        for profile in &settings.remote_profiles {
+            profile.validate().map_err(|_| invalid_config())?;
+        }
+        for (index, profile) in settings.remote_profiles.iter().enumerate() {
+            if settings.remote_profiles[..index]
+                .iter()
+                .any(|prior| prior.name() == profile.name())
+            {
+                return Err(invalid_config());
+            }
+        }
         Ok(Self {
             schema_version: settings.schema_version,
             preferred_local_profile: settings.preferred_local_profile,
             write_workspaces: settings.write_workspaces,
+            remote_profiles: settings.remote_profiles,
         })
     }
 
@@ -96,6 +116,31 @@ impl Settings {
         } else {
             WritePolicy::ReadOnly
         }
+    }
+
+    pub fn remote_profiles(&self) -> &[RemoteProfile] {
+        &self.remote_profiles
+    }
+
+    pub fn remote_profile(&self, name: &str) -> Option<&RemoteProfile> {
+        self.remote_profiles
+            .iter()
+            .find(|profile| profile.name() == name)
+    }
+
+    pub fn add_remote_profile(&mut self, profile: RemoteProfile) -> io::Result<()> {
+        profile.validate().map_err(|_| invalid_config())?;
+        if self.remote_profiles.len() >= 32 {
+            return Err(invalid_config());
+        }
+        if self.remote_profile(profile.name()).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "remote profile already exists",
+            ));
+        }
+        self.remote_profiles.push(profile);
+        Ok(())
     }
 }
 
@@ -157,15 +202,7 @@ impl ConfigStore {
     pub fn initialize(&self) -> io::Result<()> {
         let bytes =
             serde_json::to_vec_pretty(&Settings::default()).map_err(|_| invalid_config())?;
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(&self.paths.config_dir)?;
-        check_private(&fs::symlink_metadata(&self.paths.config_dir)?, true)?;
+        create_config_dir(&self.paths.config_dir)?;
         let mut temporary = tempfile::NamedTempFile::new_in(&self.paths.config_dir)?;
         // NamedTempFile creates mode 0600 on Unix; validate before writing.
         check_private(&temporary.as_file().metadata()?, false)?;
@@ -175,8 +212,49 @@ impl ConfigStore {
         temporary
             .persist_noclobber(self.paths.config_file())
             .map_err(|error| error.error)?;
+        sync_directory(&self.paths.config_dir)?;
         Ok(())
     }
+
+    /// Atomically replace an already-validated settings file or create it.
+    pub fn save(&self, settings: &Settings) -> io::Result<()> {
+        let bytes = serde_json::to_vec_pretty(settings).map_err(|_| invalid_config())?;
+        // Round-trip before mutation, so serialization changes cannot bypass validation.
+        Settings::from_json(&bytes)?;
+        create_config_dir(&self.paths.config_dir)?;
+        match fs::symlink_metadata(self.paths.config_file()) {
+            Ok(metadata) => check_private(&metadata, false)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let mut temporary = tempfile::NamedTempFile::new_in(&self.paths.config_dir)?;
+        check_private(&temporary.as_file().metadata()?, false)?;
+        temporary.write_all(&bytes)?;
+        temporary.write_all(b"\n")?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(self.paths.config_file())
+            .map_err(|error| error.error)?;
+        sync_directory(&self.paths.config_dir)
+    }
+}
+
+fn create_config_dir(path: &std::path::Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)?;
+    check_private(&fs::symlink_metadata(path)?, true)
+}
+
+fn sync_directory(path: &std::path::Path) -> io::Result<()> {
+    #[cfg(unix)]
+    File::open(path)?.sync_all()?;
+    Ok(())
 }
 
 fn defaults() -> LoadedSettings {

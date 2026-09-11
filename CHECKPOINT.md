@@ -4,9 +4,9 @@ Last updated: 2026-09-11T16:54:06Z
 
 ## Current status
 
-**Status:** M2 configuration/session foundation implemented and locally verified; hosted CI pending.
+**Status:** M3 remote-provider integration in progress; earlier hosted CI pending.
 
-**Active milestone:** M2 — Configuration and session state (hosted validation pending).
+**Active milestone:** M3 — Remote endpoint and text-chat integration.
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
 `dociler` executable with help, version, workspace/platform diagnostics, config
@@ -46,9 +46,10 @@ CI workflow is defined but has not been run on GitHub from this environment.
 
 ## Work in progress
 
-No code changes in progress. M1/M2 hosted CI/native execution remains unverified.
-Native keychain adapters and settings/grant update operations remain future
-integration, not implicitly implemented by the M2 types.
+Implementing remote profile validation, endpoint/DNS/redirect policy, native
+credential storage, OpenAI-compatible verification and text streaming, and
+mock-server tests. Starting tree is clean. M1/M2 hosted CI/native execution
+remains unverified.
 
 ## Next recommended task
 
@@ -177,3 +178,4 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-11T16:40:57Z | Codex `/root` | M1 local implementation and verification | Added runnable CLI/core, six tests, toolchain/lockfile, CI, documentation checker, ignores, and development handoff; resolves prior in-progress entry | Cargo manifests/lock, rust-toolchain.toml, crates/, .github/, .gitignore, scripts/check_docs.py, README, implementation plan, development/testing docs, checkpoint | passed: fmt, Clippy, six tests, docs, release build/smoke, document links, static YAML, ignore and diff checks; not run: hosted CI and later feature/release gates | LOCAL WORK COMPLETE; HOSTED VALIDATION PENDING | Run hosted CI and begin M2 configuration/session foundation |
 | 2026-09-11T16:45:07Z | Codex `/root` | Begin authorized M2 continuation | Add settings/path/workspace/session services, credential interface, CLI config inspection/init, tests and handoff; clean starting tree | Cargo manifests/lock, crates/, README, docs/, CHECKPOINT.md | not run: M2 checks pending | IN PROGRESS | Implement and verify M2 without model downloads or document persistence |
 | 2026-09-11T16:54:06Z | Codex `/root` | M2 local implementation and verification | Added strict private config/init, OS paths, canonical grant policy, memory-only sessions, credential boundary, CLI commands, 14 new tests, schema docs and ADR-012; resolves prior in-progress entry | Cargo.toml/lock, core manifest/modules/tests, CLI/tests, README, docs/configuration.md, architecture/development/testing/decisions docs, CHECKPOINT.md | passed: fmt, Clippy, 20 debug and 20 release test executions, Rust docs, release build/smoke, Markdown and diff; failed: initial sandbox dependency DNS, resolved by authorized retry; not run: hosted/platform/keychain/audit/later release gates | LOCAL WORK COMPLETE; HOSTED VALIDATION PENDING | Run hosted CI; begin M3 remote profile validation and credential adapters before onboarding/streaming chat |
+| 2026-09-11T16:58:57Z | Codex `/root` | Begin authorized M3 continuation | Add remote profiles, secure endpoint resolution, OS keychain adapter, upstream verification, one-shot streaming chat, mock-server tests and handoff; clean starting tree | Cargo manifests/lock, crates/, README, docs/, CHECKPOINT.md | not run: M3 checks pending | IN PROGRESS | Implement and verify remote text integration without documents or local models |

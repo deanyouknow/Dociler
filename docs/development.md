@@ -7,10 +7,14 @@ integration tests, and GitHub Actions. M2 adds OS paths, validated JSON settings
 explicit no-clobber initialization, canonical workspace policy lookup, bounded
 memory-only sessions, and a credential-store interface. Native keychain adapters,
 chat, TUI onboarding, inference, document processing, and serving remain future
-work. See [Configuration](configuration.md) for commands, schema, and boundaries.
+work. M3 adds verified remote profiles, OS keychain integration, and streamed
+one-shot text chat. The immersive TUI and document/local-model integrations
+remain future work. See [Configuration](configuration.md) and
+[Remote providers](remote-providers.md) for commands and boundaries.
 
 Direct dependencies are pinned: directories 6.0.0, Serde 1.0.219, serde_json
-1.0.140, tempfile 3.19.1, and zeroize 1.8.1. The lockfile pins transitives. These
+1.0.140, tempfile 3.19.1, zeroize 1.8.1, URL 2.5.4, Reqwest 0.12.23,
+and keyring 3.6.3. The lockfile pins transitives. These
 are deliberate Rust-1.85-compatible baseline pins, not claims to be the latest
 releases. Dependency vulnerability/license audits remain release work.
 
@@ -38,6 +42,7 @@ cargo run --locked -- --version
 cargo run --locked -- doctor
 cargo run --locked -- config paths
 cargo run --locked -- config show
+cargo run --locked -- connect list
 cargo build --release --locked
 ```
 
@@ -53,7 +58,9 @@ persist settings, or test memory/GPU readiness.
 Its exit status means the diagnostic command completed, not that inference is
 available. Help/version exit with 0; invalid arguments with 2; diagnostic,
 configuration, and output errors with 1. Broken output pipes exit quietly.
-Only `config init` writes configuration, explicitly and without overwriting.
+`config init` writes defaults explicitly and without overwriting. A successful
+`connect add` also saves a verified non-secret profile; when a key is supplied,
+it writes the key only to the OS credential service.
 
 ## Workspace boundaries
 

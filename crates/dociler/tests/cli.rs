@@ -1,7 +1,10 @@
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 
 struct Workspace(PathBuf);
 
@@ -26,12 +29,85 @@ impl Workspace {
             .output()
             .expect("run dociler")
     }
+
+    fn run_with_input(&self, args: &[&str], input: &[u8]) -> Output {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_dociler"))
+            .current_dir(&self.0)
+            .env("DOCILER_CONFIG_DIR", self.0.join("settings"))
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("run dociler");
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        child.wait_with_output().expect("wait for dociler")
+    }
 }
 
 impl Drop for Workspace {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).expect("remove isolated test workspace");
     }
+}
+
+fn read_request(stream: &mut TcpStream) {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    let header_end = loop {
+        let count = stream.read(&mut buffer).unwrap();
+        assert!(count > 0);
+        request.extend_from_slice(&buffer[..count]);
+        if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
+        }
+    };
+    let headers = String::from_utf8_lossy(&request[..header_end]);
+    let length = headers
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .map(str::trim)
+                .map(str::to_owned)
+        })
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    while request.len() - header_end < length {
+        let count = stream.read(&mut buffer).unwrap();
+        assert!(count > 0);
+        request.extend_from_slice(&buffer[..count]);
+    }
+    assert!(!String::from_utf8_lossy(&request).contains("private-test-value"));
+}
+
+fn serve_cli_flow() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        let replies = [
+            ("application/json", r#"{"data":[{"id":"model-a"}]}"#),
+            (
+                "application/json",
+                r#"{"choices":[{"message":{"content":"OK"}}]}"#,
+            ),
+            (
+                "text/event-stream",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"CLI works\"}}]}\n\ndata: [DONE]\n\n",
+            ),
+        ];
+        for (content_type, body) in replies {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+    (format!("http://{address}/v1"), handle)
 }
 
 #[test]
@@ -42,7 +118,7 @@ fn non_interactive_launch_prints_help_without_creating_state() {
     assert!(output.stderr.is_empty());
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("Usage: dociler"));
-    assert!(text.contains("not available yet"));
+    assert!(text.contains("Remote text chat is available"));
     assert!(!text.contains('\u{1b}'));
     assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
 }
@@ -179,6 +255,56 @@ fn config_override_must_be_absolute() {
             .unwrap()
             .contains("relative-secret-value")
     );
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+}
+
+#[test]
+fn remote_profile_add_list_and_stdin_run_work_end_to_end() {
+    let workspace = Workspace::new();
+    let (url, server) = serve_cli_flow();
+    let add = workspace.run(&["connect", "add", "office", &url, "model-a"]);
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert!(
+        String::from_utf8(add.stdout)
+            .unwrap()
+            .contains("Saved remote profile 'office'")
+    );
+    let list = workspace.run(&["connect", "list"]);
+    let listed = String::from_utf8(list.stdout).unwrap();
+    assert!(listed.contains("office"));
+    assert!(listed.contains("credential=none"));
+    let run = workspace.run_with_input(&["run", "office"], "Tolong jawab".as_bytes());
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8(run.stdout).unwrap(), "CLI works\n");
+    assert!(run.stderr.is_empty());
+    server.join().unwrap();
+    let config = fs::read_to_string(workspace.0.join("settings/config.json")).unwrap();
+    assert!(config.contains("office"));
+    assert!(!config.contains("Tolong jawab"));
+}
+
+#[test]
+fn unsafe_remote_and_missing_profile_fail_without_writes() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["connect", "verify", "http://8.8.8.8/v1", "model"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("unsafe endpoint")
+    );
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+    let output = workspace.run_with_input(&["run", "missing"], b"prompt");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
     assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
 }
 

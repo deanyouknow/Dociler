@@ -49,6 +49,46 @@ pub enum CredentialError {
     InvalidId,
 }
 
+/// The native user credential service: Keychain on macOS, Credential Manager
+/// on Windows, and Secret Service on Linux. It has no plaintext fallback.
+pub struct OsCredentialStore;
+
+impl OsCredentialStore {
+    fn entry(id: &CredentialId) -> Result<keyring::Entry, CredentialError> {
+        keyring::Entry::new("io.dociler.remote", id.as_str()).map_err(map_error)
+    }
+}
+
+fn map_error(error: keyring::Error) -> CredentialError {
+    match error {
+        keyring::Error::NoEntry => CredentialError::Unavailable,
+        _ => CredentialError::AccessDenied,
+    }
+}
+
+impl CredentialStore for OsCredentialStore {
+    fn get(&self, id: &CredentialId) -> Result<Option<Secret>, CredentialError> {
+        match Self::entry(id)?.get_password() {
+            Ok(secret) => Ok(Some(Secret::new(secret))),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(map_error(error)),
+        }
+    }
+
+    fn set(&self, id: &CredentialId, secret: &Secret) -> Result<(), CredentialError> {
+        Self::entry(id)?
+            .set_password(secret.expose())
+            .map_err(map_error)
+    }
+
+    fn delete(&self, id: &CredentialId) -> Result<(), CredentialError> {
+        match Self::entry(id)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(map_error(error)),
+        }
+    }
+}
+
 pub trait CredentialStore {
     fn get(&self, id: &CredentialId) -> Result<Option<Secret>, CredentialError>;
     fn set(&self, id: &CredentialId, secret: &Secret) -> Result<(), CredentialError>;

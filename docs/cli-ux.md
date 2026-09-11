@@ -25,6 +25,13 @@ The landing header shows:
 - active or last-used backend and model profile;
 - read-only or write-enabled workspace status.
 
+During the M3 transition, bare launch still prints non-interactive help. Working
+remote commands are `connect verify`, `connect add`, `connect list`, and
+`run NAME`, documented in [Remote providers](remote-providers.md). `run` reads
+one prompt from stdin through EOF and streams one answer. This is not considered
+completion of the landing screen, onboarding wizard, transcript, slash commands,
+keyboard cancellation, or multi-turn experience specified below.
+
 ## First-run wizard
 
 ### Backend choice

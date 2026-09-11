@@ -49,17 +49,19 @@ or `.env` auto-loading.
 {
   "schema_version": 1,
   "preferred_local_profile": "dociler-lite",
-  "write_workspaces": []
+  "write_workspaces": [],
+  "remote_profiles": []
 }
 ```
 
 `schema_version` is required. Omitted profile and workspace list default to Lite
-and no grants. The only profiles are `dociler-lite` and `dociler-pro`; choosing
+and no grants/profiles. The only local profiles are `dociler-lite` and
+`dociler-pro`; choosing
 one is a preference, not a model-load request or memory qualification result.
 
 Settings are limited to 64 KiB and 256 workspace grants. Unknown fields,
 duplicate fields, invalid types/profiles, relative grant paths, invalid UTF-8,
-malformed JSON, and unsupported versions fail closed. No automatic migration
+malformed JSON, duplicate remote names, invalid remote endpoints, and unsupported versions fail closed. No automatic migration
 exists yet. Errors do not echo the rejected key/value or file contents.
 The parser uses [Serde's unknown-field rejection](https://serde.rs/container-attrs.html).
 
@@ -87,9 +89,13 @@ storage bound, not model-token budgeting. Clearing/dropping messages zeroizes
 owned strings; it does not promise protection against OS swap, external copies,
 or process inspection.
 
+Remote profiles persist name, normalized base URL, upstream model ID, and a
+boolean saying whether an OS credential is required. API key values are never
+serialized. See [Remote providers](remote-providers.md) for commands and the
+network/keychain boundary.
+
 The credential interface accepts opaque profile IDs and redacted, zeroizing
-secret values. There is no native keychain adapter yet: the unavailable adapter
-returns an explicit error on get/set/delete, never a plaintext-file fallback.
-Do not place API keys in this JSON file or command-line arguments. Remote
-profiles, destination-bound consent, native keychain integration, and the TUI
-will arrive in later milestones.
+secret values. Its native adapter uses the logged-in user's platform credential
+service and returns an explicit error when unavailable, never a plaintext-file
+fallback. Do not place API keys in this JSON file or command-line arguments.
+Destination-bound document consent and the TUI will arrive in later milestones.

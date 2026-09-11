@@ -7,5 +7,6 @@ pub mod config;
 pub mod credentials;
 pub mod diagnostics;
 pub mod paths;
+pub mod remote;
 pub mod session;
 pub mod workspace;

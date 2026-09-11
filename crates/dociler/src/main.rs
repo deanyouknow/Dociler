@@ -1,10 +1,13 @@
 use std::ffi::OsString;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::process::ExitCode;
 
 use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings};
+use dociler_core::credentials::{CredentialError, CredentialStore, OsCredentialStore, Secret};
 use dociler_core::diagnostics::Diagnostics;
 use dociler_core::paths::AppPaths;
+use dociler_core::remote::{RemoteClient, RemoteError, RemoteProfile};
+use dociler_core::session::{Role, Session};
 use dociler_core::workspace::{Workspace, WritePolicy};
 
 const HELP: &str = "Dociler — local-first document assistant (development build)
@@ -16,14 +19,20 @@ Commands:
   config paths  Show OS config/model/runtime/cache locations (no writes)
   config show   Validate settings and show current-workspace policy (no writes)
   config init   Create safe default settings; never overwrite an existing file
+  connect list  List saved remote profiles (never credentials)
+  connect verify URL MODEL
+                Verify an endpoint without saving it
+  connect add NAME URL MODEL
+                Verify and save a new profile; reads optional DOCILER_API_KEY
+  run NAME       Stream one remote text response; reads the prompt from stdin
   help          Show this help
 
 Options:
   -h, --help    Show this help
   -V, --version Show the build version
 
-This build contains configuration and session foundations. Chat, document reading, model loading,
-and the API server are not available yet. See IMPLEMENTATION_PLAN.md.
+Remote text chat is available through saved profiles. The TUI, document reading,
+local model loading, and Dociler API server are not available yet.
 ";
 
 enum Command {
@@ -33,6 +42,19 @@ enum Command {
     ConfigPaths,
     ConfigShow,
     ConfigInit,
+    ConnectList,
+    ConnectVerify {
+        url: String,
+        model: String,
+    },
+    ConnectAdd {
+        name: String,
+        url: String,
+        model: String,
+    },
+    Run {
+        name: String,
+    },
 }
 
 fn parse(args: &[OsString]) -> Option<Command> {
@@ -50,6 +72,23 @@ fn parse(args: &[OsString]) -> Option<Command> {
         [command, action] if command == "config" && action == "paths" => Some(Command::ConfigPaths),
         [command, action] if command == "config" && action == "show" => Some(Command::ConfigShow),
         [command, action] if command == "config" && action == "init" => Some(Command::ConfigInit),
+        [command, action] if command == "connect" && action == "list" => Some(Command::ConnectList),
+        [command, action, url, model] if command == "connect" && action == "verify" => {
+            Some(Command::ConnectVerify {
+                url: url.to_str()?.to_owned(),
+                model: model.to_str()?.to_owned(),
+            })
+        }
+        [command, action, name, url, model] if command == "connect" && action == "add" => {
+            Some(Command::ConnectAdd {
+                name: name.to_str()?.to_owned(),
+                url: url.to_str()?.to_owned(),
+                model: model.to_str()?.to_owned(),
+            })
+        }
+        [command, name] if command == "run" => Some(Command::Run {
+            name: name.to_str()?.to_owned(),
+        }),
         _ => None,
     }
 }
@@ -58,6 +97,9 @@ enum CommandError {
     Output(io::Error),
     Workspace,
     Config(io::ErrorKind),
+    Credential(CredentialError),
+    Input,
+    Remote(RemoteError),
 }
 
 impl From<io::Error> for CommandError {
@@ -111,8 +153,41 @@ fn print_settings(
     writeln!(output, "Session storage: memory only; no persisted history")?;
     writeln!(
         output,
-        "Credential store: interface only; OS adapter not implemented"
+        "Credential store: native OS adapter (availability checked only when used)"
+    )?;
+    writeln!(
+        output,
+        "Saved remote profiles: {}",
+        loaded.settings.remote_profiles().len()
     )
+}
+
+fn environment_secret() -> Result<Option<Secret>, CommandError> {
+    match std::env::var("DOCILER_API_KEY") {
+        Ok(value) if value.is_empty() => Ok(None),
+        Ok(value) if value.len() <= 16 * 1024 => Ok(Some(Secret::new(value))),
+        Ok(_) | Err(std::env::VarError::NotUnicode(_)) => Err(CommandError::Input),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+    }
+}
+
+fn secret_for(profile: &RemoteProfile) -> Result<Option<Secret>, CommandError> {
+    if !profile.needs_credential() {
+        return Ok(None);
+    }
+    OsCredentialStore
+        .get(&profile.credential_id())
+        .map_err(CommandError::Credential)?
+        .ok_or(CommandError::Credential(CredentialError::Unavailable))
+        .map(Some)
+}
+
+fn remote_profile(name: &str) -> Result<RemoteProfile, CommandError> {
+    settings()?
+        .settings
+        .remote_profile(name)
+        .cloned()
+        .ok_or(CommandError::Input)
 }
 
 fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError> {
@@ -148,6 +223,105 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 "All workspaces remain read-only. No models downloaded or services started."
             )?;
         }
+        Command::ConnectList => {
+            let loaded = settings()?;
+            if loaded.settings.remote_profiles().is_empty() {
+                writeln!(output, "No remote profiles saved.")?;
+            } else {
+                for profile in loaded.settings.remote_profiles() {
+                    writeln!(
+                        output,
+                        "{}  {}  model={}  credential={}",
+                        profile.name(),
+                        profile.base_url(),
+                        profile.model(),
+                        if profile.needs_credential() {
+                            "OS store"
+                        } else {
+                            "none"
+                        }
+                    )?;
+                }
+            }
+        }
+        Command::ConnectVerify { url, model } => {
+            let secret = environment_secret()?;
+            let profile = RemoteProfile::new("verification", &url, &model, secret.is_some())
+                .map_err(CommandError::Remote)?;
+            let client = RemoteClient::connect(profile.clone(), secret.as_ref())
+                .map_err(CommandError::Remote)?;
+            client.verify().map_err(CommandError::Remote)?;
+            writeln!(output, "Verified endpoint: {}", profile.base_url())?;
+            writeln!(output, "Verified model: {}", profile.model())?;
+            writeln!(output, "Nothing saved.")?;
+        }
+        Command::ConnectAdd { name, url, model } => {
+            let app_paths = paths()?;
+            let store = ConfigStore::new(app_paths);
+            let mut loaded = store
+                .load()
+                .map_err(|error| CommandError::Config(error.kind()))?;
+            let secret = environment_secret()?;
+            let profile = RemoteProfile::new(&name, &url, &model, secret.is_some())
+                .map_err(CommandError::Remote)?;
+            loaded
+                .settings
+                .add_remote_profile(profile.clone())
+                .map_err(|error| CommandError::Config(error.kind()))?;
+            let client = RemoteClient::connect(profile.clone(), secret.as_ref())
+                .map_err(CommandError::Remote)?;
+            client.verify().map_err(CommandError::Remote)?;
+
+            let credential_id = profile.credential_id();
+            if let Some(secret) = &secret {
+                OsCredentialStore
+                    .set(&credential_id, secret)
+                    .map_err(CommandError::Credential)?;
+            }
+            if let Err(error) = store.save(&loaded.settings) {
+                if secret.is_some() {
+                    let _ = OsCredentialStore.delete(&credential_id);
+                }
+                return Err(CommandError::Config(error.kind()));
+            }
+            writeln!(output, "Saved remote profile '{}'.", profile.name())?;
+            writeln!(output, "Endpoint: {}", profile.base_url())?;
+            writeln!(output, "Model: {}", profile.model())?;
+            writeln!(output, "Use: dociler run {}", profile.name())?;
+        }
+        Command::Run { name } => {
+            let profile = remote_profile(&name)?;
+            let secret = secret_for(&profile)?;
+            let client =
+                RemoteClient::connect(profile, secret.as_ref()).map_err(CommandError::Remote)?;
+            let mut bytes = Vec::new();
+            io::stdin()
+                .lock()
+                .take(64 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| CommandError::Input)?;
+            if bytes.is_empty() || bytes.len() > 64 * 1024 {
+                return Err(CommandError::Input);
+            }
+            let prompt = String::from_utf8(bytes).map_err(|_| CommandError::Input)?;
+            if prompt.trim().is_empty() {
+                return Err(CommandError::Input);
+            }
+            let mut session = Session::new(workspace()?);
+            session
+                .push(Role::User, prompt)
+                .map_err(|_| CommandError::Input)?;
+            let answer = client
+                .stream_chat(session.messages(), |text| {
+                    write!(output, "{text}").map_err(|_| RemoteError::Output)?;
+                    output.flush().map_err(|_| RemoteError::Output)
+                })
+                .map_err(CommandError::Remote)?;
+            session
+                .push(Role::Assistant, answer)
+                .map_err(|_| CommandError::Remote(RemoteError::ResponseLimit))?;
+            writeln!(output)?;
+        }
         Command::Doctor => {
             let workspace = workspace()?;
             let report =
@@ -168,7 +342,11 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             print_settings(output, &loaded, &workspace)?;
             writeln!(
                 output,
-                "Chat, document parsing, and inference: not implemented"
+                "Remote text chat: available via 'dociler run PROFILE'"
+            )?;
+            writeln!(
+                output,
+                "Document parsing and local inference: not implemented"
             )?;
             writeln!(output, "Memory/GPU readiness: not assessed")?;
             writeln!(output, "API server: not implemented (no listening ports)")?;
@@ -210,6 +388,41 @@ fn main() -> ExitCode {
                 CommandError::Workspace => {
                     "workspace unavailable; run from an accessible directory."
                 }
+                CommandError::Credential(CredentialError::Unavailable) => {
+                    "required credential is missing or the OS credential service is unavailable."
+                }
+                CommandError::Credential(_) => {
+                    "OS credential service denied the operation; no plaintext fallback was used."
+                }
+                CommandError::Input => {
+                    "invalid input; use 'dociler --help'. Prompts for 'run' must be non-empty UTF-8 on stdin and at most 64 KiB."
+                }
+                CommandError::Remote(error) => match error {
+                    RemoteError::InvalidProfile => "invalid remote profile name, URL, or model.",
+                    RemoteError::UnsafeEndpoint => {
+                        "unsafe endpoint: use HTTPS for public hosts; HTTP is limited to loopback/private addresses; URLs must be root or /v1 without credentials, query, or fragment."
+                    }
+                    RemoteError::Resolution => {
+                        "endpoint DNS resolution failed or returned no safe addresses."
+                    }
+                    RemoteError::Connection => "remote connection failed or timed out.",
+                    RemoteError::Authentication => {
+                        "remote authentication failed; check the OS-stored key or DOCILER_API_KEY."
+                    }
+                    RemoteError::Upstream => {
+                        "remote endpoint returned an error or redirect; redirects are disabled."
+                    }
+                    RemoteError::InvalidResponse => {
+                        "remote endpoint returned an invalid OpenAI-compatible response."
+                    }
+                    RemoteError::ModelUnavailable => {
+                        "requested model was not listed by the remote endpoint."
+                    }
+                    RemoteError::ResponseLimit => {
+                        "remote response exceeded Dociler's safety limit."
+                    }
+                    RemoteError::Output => "output failed while streaming the remote response.",
+                },
                 CommandError::Output(_) => "output failed; check the output destination.",
             };
             let _ = writeln!(io::stderr().lock(), "dociler: {message}");

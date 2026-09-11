@@ -159,6 +159,15 @@ dependency in its API. See [Configuration](configuration.md) for the implemented
 schema and limits. This foundation is not yet the complete request orchestrator
 or document filesystem sandbox.
 
+M3 adds the first remote adapter and native credential adapter. A saved profile
+contains no key; it derives an opaque credential identifier used with the OS
+store. Each remote client validates the URL, resolves and pins DNS addresses,
+constructs a proxy-free/no-redirect Reqwest client, checks model discovery plus
+a minimal generation, and parses bounded SSE into the memory-only session.
+See [Remote providers](remote-providers.md). The CLI currently supplies only one
+user message per process; orchestration, skills, documents, and TUI state remain
+future layers.
+
 ## Failure containment
 
 - Parser crash/timeout affects only the worker and produces a per-file error.
