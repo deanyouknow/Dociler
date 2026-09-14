@@ -2,10 +2,12 @@ use std::ffi::OsString;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
+use dociler_core::chat::CancellationToken;
 use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings};
 use dociler_core::credentials::{CredentialError, CredentialStore, OsCredentialStore, Secret};
 use dociler_core::diagnostics::Diagnostics;
 use dociler_core::paths::AppPaths;
+use dociler_core::profiles::{ProfileInstallError, install_remote_profile};
 use dociler_core::remote::{RemoteClient, RemoteError, RemoteProfile};
 use dociler_core::session::{Role, Session};
 use dociler_core::workspace::{Workspace, WritePolicy};
@@ -204,12 +206,20 @@ fn remote_profile(name: &str) -> Result<RemoteProfile, CommandError> {
 
 fn interactive(name: Option<&str>) -> Result<(), CommandError> {
     let workspace = workspace()?;
-    let loaded = settings()?;
+    let app_paths = paths()?;
+    let loaded = ConfigStore::new(app_paths.clone())
+        .load()
+        .map_err(|error| CommandError::Config(error.kind()))?;
     if name.is_some_and(|name| loaded.settings.remote_profile(name).is_none()) {
         return Err(CommandError::Input);
     }
-    tui::run(workspace, loaded.settings.remote_profiles().to_vec(), name)
-        .map_err(|_| CommandError::Terminal)
+    tui::run(
+        workspace,
+        app_paths,
+        loaded.settings.remote_profiles().to_vec(),
+        name,
+    )
+    .map_err(|_| CommandError::Terminal)
 }
 
 fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError> {
@@ -282,33 +292,21 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
         }
         Command::ConnectAdd { name, url, model } => {
             let app_paths = paths()?;
-            let store = ConfigStore::new(app_paths);
-            let mut loaded = store
-                .load()
-                .map_err(|error| CommandError::Config(error.kind()))?;
             let secret = environment_secret()?;
-            let profile = RemoteProfile::new(&name, &url, &model, secret.is_some())
-                .map_err(CommandError::Remote)?;
-            loaded
-                .settings
-                .add_remote_profile(profile.clone())
-                .map_err(|error| CommandError::Config(error.kind()))?;
-            let client = RemoteClient::connect(profile.clone(), secret.as_ref())
-                .map_err(CommandError::Remote)?;
-            client.verify().map_err(CommandError::Remote)?;
-
-            let credential_id = profile.credential_id();
-            if let Some(secret) = &secret {
-                OsCredentialStore
-                    .set(&credential_id, secret)
-                    .map_err(CommandError::Credential)?;
-            }
-            if let Err(error) = store.save(&loaded.settings) {
-                if secret.is_some() {
-                    let _ = OsCredentialStore.delete(&credential_id);
-                }
-                return Err(CommandError::Config(error.kind()));
-            }
+            let profile = install_remote_profile(
+                &app_paths,
+                &name,
+                &url,
+                &model,
+                secret,
+                &CancellationToken::new(),
+            )
+            .map_err(|error| match error {
+                ProfileInstallError::Config(kind) => CommandError::Config(kind),
+                ProfileInstallError::Credential(error) => CommandError::Credential(error),
+                ProfileInstallError::Remote(error) => CommandError::Remote(error),
+                ProfileInstallError::Cancelled => CommandError::Remote(RemoteError::Cancelled),
+            })?;
             writeln!(output, "Saved remote profile '{}'.", profile.name())?;
             writeln!(output, "Endpoint: {}", profile.base_url())?;
             writeln!(output, "Model: {}", profile.model())?;

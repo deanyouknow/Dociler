@@ -1,6 +1,4 @@
 use std::io;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Duration;
@@ -13,9 +11,14 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use dociler_core::credentials::{CredentialError, CredentialStore, OsCredentialStore};
-use dociler_core::remote::{RemoteClient, RemoteError, RemoteProfile};
-use dociler_core::session::{Role, Session};
+use dociler_core::chat::{
+    CancellationToken, ChatError, Generation, GenerationEvent, GenerationPoll, RemoteChatBackend,
+};
+use dociler_core::credentials::{CredentialError, Secret};
+use dociler_core::paths::AppPaths;
+use dociler_core::profiles::{ProfileInstallError, install_remote_profile};
+use dociler_core::remote::{RemoteError, RemoteProfile};
+use dociler_core::session::Session;
 use dociler_core::workspace::Workspace;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -50,35 +53,55 @@ impl TranscriptEntry {
     }
 }
 
-#[derive(Clone, Copy)]
-enum WorkerError {
-    Credential(CredentialError),
-    Remote(RemoteError),
-}
-
-enum WorkerEvent {
-    Token(String),
-    Finished(Session),
-    Failed(Session, WorkerError),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Activity {
     Ready,
     Generating,
     Cancelling,
+    VerifyingProfile,
+    CancellingProfile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnboardingStep {
+    Name,
+    Url,
+    Model,
+    ApiKey,
+    Verifying,
+}
+
+struct Onboarding {
+    step: OnboardingStep,
+    name: String,
+    url: String,
+    model: String,
+}
+
+impl Onboarding {
+    fn new() -> Self {
+        Self {
+            step: OnboardingStep::Name,
+            name: String::new(),
+            url: String::new(),
+            model: String::new(),
+        }
+    }
 }
 
 pub struct App {
     workspace: Workspace,
+    paths: AppPaths,
     profiles: Vec<RemoteProfile>,
     selected: Option<usize>,
     session: Option<Session>,
     transcript: Vec<TranscriptEntry>,
     input: Zeroizing<String>,
     partial_answer: Zeroizing<String>,
-    worker: Option<Receiver<WorkerEvent>>,
-    cancel: Option<Arc<AtomicBool>>,
+    generation: Option<Generation>,
+    onboarding: Option<Onboarding>,
+    profile_worker: Option<Receiver<Result<RemoteProfile, ProfileInstallError>>>,
+    profile_cancel: Option<CancellationToken>,
     activity: Activity,
     scroll: u16,
     confirm_clear: bool,
@@ -88,6 +111,7 @@ pub struct App {
 impl App {
     pub fn new(
         workspace: Workspace,
+        paths: AppPaths,
         profiles: Vec<RemoteProfile>,
         selected_name: Option<&str>,
     ) -> Self {
@@ -97,13 +121,16 @@ impl App {
         let mut app = Self {
             session: Some(Session::new(workspace.clone())),
             workspace,
+            paths,
             profiles,
             selected,
             transcript: Vec::new(),
             input: Zeroizing::new(String::new()),
             partial_answer: Zeroizing::new(String::new()),
-            worker: None,
-            cancel: None,
+            generation: None,
+            onboarding: None,
+            profile_worker: None,
+            profile_cancel: None,
             activity: Activity::Ready,
             scroll: 0,
             confirm_clear: false,
@@ -111,7 +138,8 @@ impl App {
         };
         app.notice("Welcome to Dociler. Text chat is memory-only; documents and local models are not active.");
         if app.selected.is_none() {
-            app.notice("No remote profile is saved. Exit and use `dociler connect add NAME URL MODEL`, then relaunch.");
+            app.notice("No remote profile is saved. Remote setup is open; local models arrive in a later milestone.");
+            app.begin_onboarding();
         } else if app.profiles.len() > 1 {
             app.notice(
                 "Multiple profiles found. Use /connect to list them or /connect NAME to switch.",
@@ -136,22 +164,128 @@ impl App {
         self.scroll = u16::MAX;
     }
 
+    fn begin_onboarding(&mut self) {
+        self.input.zeroize();
+        self.input.clear();
+        self.onboarding = Some(Onboarding::new());
+        self.notice(
+            "Remote setup: choose a short profile name. Nothing is saved until endpoint and model verification pass.",
+        );
+    }
+
+    fn cancel_onboarding(&mut self) {
+        self.input.zeroize();
+        self.input.clear();
+        self.onboarding = None;
+        self.notice("Remote setup cancelled; nothing was saved.");
+    }
+
     fn submit(&mut self) {
         if self.activity != Activity::Ready {
             self.error("A response is already active. Press Esc to cancel it.");
             return;
         }
-        let text = self.input.trim().to_owned();
+        let optional_key = self
+            .onboarding
+            .as_ref()
+            .is_some_and(|onboarding| onboarding.step == OnboardingStep::ApiKey);
+        let text = if optional_key {
+            Zeroizing::new(self.input.to_string())
+        } else {
+            Zeroizing::new(self.input.trim().to_owned())
+        };
         self.input.zeroize();
         self.input.clear();
-        if text.is_empty() {
+        if text.is_empty() && !optional_key {
             return;
         }
-        if text.starts_with('/') {
-            self.handle_command(&text);
+        if self.onboarding.is_some() && text.as_str() == "/exit" {
+            self.quit = true;
+        } else if self.onboarding.is_some() && text.as_str() == "/help" {
+            self.notice("Remote setup fields: profile name, endpoint URL, model ID, then optional hidden API key. Escape cancels setup; /exit exits Dociler.");
+        } else if self.onboarding.is_some() {
+            self.handle_onboarding_input(text.as_str());
+        } else if text.starts_with('/') {
+            self.handle_command(text.as_str());
         } else {
-            self.start_generation(text);
+            self.start_generation(text.to_string());
         }
+    }
+
+    fn handle_onboarding_input(&mut self, input: &str) {
+        let Some(step) = self.onboarding.as_ref().map(|onboarding| onboarding.step) else {
+            return;
+        };
+        match step {
+            OnboardingStep::Name => {
+                if RemoteProfile::new(input, "https://example.invalid/v1", "model", false).is_err()
+                {
+                    self.error(
+                        "Profile name must use 1–48 letters, numbers, hyphens, or underscores.",
+                    );
+                    return;
+                }
+                let onboarding = self.onboarding.as_mut().expect("onboarding remains active");
+                onboarding.name = input.to_owned();
+                onboarding.step = OnboardingStep::Url;
+                self.notice("Enter the endpoint URL. Public hosts require HTTPS; private or loopback hosts may use HTTP.");
+            }
+            OnboardingStep::Url => {
+                if RemoteProfile::new("validation", input, "model", false).is_err() {
+                    self.error("Invalid endpoint. Use a root URL or /v1 with no credentials, query, or fragment.");
+                    return;
+                }
+                let onboarding = self.onboarding.as_mut().expect("onboarding remains active");
+                onboarding.url = input.to_owned();
+                onboarding.step = OnboardingStep::Model;
+                self.notice("Enter the exact upstream model ID exposed by /v1/models.");
+            }
+            OnboardingStep::Model => {
+                let onboarding = self.onboarding.as_ref().expect("onboarding remains active");
+                if RemoteProfile::new(&onboarding.name, &onboarding.url, input, false).is_err() {
+                    self.error(
+                        "Invalid model ID. Use a non-empty printable value up to 256 bytes.",
+                    );
+                    return;
+                }
+                let onboarding = self.onboarding.as_mut().expect("onboarding remains active");
+                onboarding.model = input.to_owned();
+                onboarding.step = OnboardingStep::ApiKey;
+                self.notice("Enter the API key, or press Enter for none. Key input is hidden and can only be saved in the OS credential store.");
+            }
+            OnboardingStep::ApiKey => {
+                if input.len() > 16 * 1024 || input.chars().any(char::is_control) {
+                    self.error("API key must be at most 16 KiB with no control characters.");
+                    return;
+                }
+                let secret = (!input.is_empty()).then(|| Secret::new(input.to_owned()));
+                self.start_profile_install(secret);
+            }
+            OnboardingStep::Verifying => {}
+        }
+    }
+
+    fn start_profile_install(&mut self, secret: Option<Secret>) {
+        let Some(onboarding) = &mut self.onboarding else {
+            return;
+        };
+        onboarding.step = OnboardingStep::Verifying;
+        let paths = self.paths.clone();
+        let name = onboarding.name.clone();
+        let url = onboarding.url.clone();
+        let model = onboarding.model.clone();
+        let cancellation = CancellationToken::new();
+        let worker_cancellation = cancellation.clone();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let result =
+                install_remote_profile(&paths, &name, &url, &model, secret, &worker_cancellation);
+            let _ = sender.send(result);
+        });
+        self.profile_worker = Some(receiver);
+        self.profile_cancel = Some(cancellation);
+        self.activity = Activity::VerifyingProfile;
+        self.notice("Verifying model listing and minimal generation… Escape requests cancellation before commit.");
     }
 
     fn handle_command(&mut self, input: &str) {
@@ -161,7 +295,7 @@ impl App {
         let command = parts.next().unwrap_or("");
         match command {
             "/help" => self.notice(
-                "/help  /status  /connect [NAME]  /clear  /exit\nEsc cancels a response; PageUp/PageDown scroll. Other planned commands are shown as unavailable.",
+                "/help  /status  /connect [NAME|add]  /clear  /exit\nEsc cancels a response/setup; PageUp/PageDown scroll. Other planned commands are shown as unavailable.",
             ),
             "/status" => {
                 let profile = self
@@ -176,10 +310,12 @@ impl App {
             "/connect" => {
                 if let Some(name) = parts.next() {
                     if parts.next().is_some() {
-                        self.error("Usage: /connect NAME");
+                        self.error("Usage: /connect NAME or /connect add");
                         return;
                     }
-                    if let Some(index) = self.profiles.iter().position(|profile| profile.name() == name) {
+                    if name == "add" {
+                        self.begin_onboarding();
+                    } else if let Some(index) = self.profiles.iter().position(|profile| profile.name() == name) {
                         self.selected = Some(index);
                         self.session = Some(Session::new(self.workspace.clone()));
                         self.confirm_clear = false;
@@ -188,7 +324,7 @@ impl App {
                         self.error("Unknown profile. Use /connect to list saved profiles.");
                     }
                 } else if self.profiles.is_empty() {
-                    self.notice("No profiles saved. Use `dociler connect add NAME URL MODEL` outside this screen.");
+                    self.notice("No profiles saved. Use /connect add to open remote setup.");
                 } else {
                     let profiles = self
                         .profiles
@@ -226,15 +362,22 @@ impl App {
             self.error("No active remote profile. Use /connect or add one outside this screen.");
             return;
         };
-        let Some(mut session) = self.session.take() else {
+        let Some(session) = self.session.take() else {
             self.error("Conversation state is unavailable; use /clear before retrying.");
             return;
         };
-        if session.push(Role::User, prompt.clone()).is_err() {
-            self.session = Some(session);
-            self.error("Conversation memory limit reached. Use /clear before continuing.");
-            return;
-        }
+        let generation = match Generation::start(
+            session,
+            prompt.clone(),
+            Box::new(RemoteChatBackend::native(profile)),
+        ) {
+            Ok(generation) => generation,
+            Err(session) => {
+                self.session = Some(session);
+                self.error("Conversation memory limit reached. Use /clear before continuing.");
+                return;
+            }
+        };
         self.transcript
             .push(TranscriptEntry::new(EntryKind::User, prompt));
         self.partial_answer.zeroize();
@@ -243,92 +386,17 @@ impl App {
         self.activity = Activity::Generating;
         self.scroll = u16::MAX;
 
-        let (sender, receiver) = mpsc::channel();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let worker_cancel = Arc::clone(&cancel);
-        thread::spawn(move || {
-            let secret = if profile.needs_credential() {
-                match OsCredentialStore.get(&profile.credential_id()) {
-                    Ok(Some(secret)) => Some(secret),
-                    Ok(None) => {
-                        let _ = sender.send(WorkerEvent::Failed(
-                            session,
-                            WorkerError::Credential(CredentialError::Unavailable),
-                        ));
-                        return;
-                    }
-                    Err(error) => {
-                        let _ = sender
-                            .send(WorkerEvent::Failed(session, WorkerError::Credential(error)));
-                        return;
-                    }
-                }
-            } else {
-                None
-            };
-            if worker_cancel.load(Ordering::Relaxed) {
-                let _ = sender.send(WorkerEvent::Failed(
-                    session,
-                    WorkerError::Remote(RemoteError::Cancelled),
-                ));
-                return;
-            }
-            let client = match RemoteClient::connect(profile, secret.as_ref()) {
-                Ok(client) => client,
-                Err(error) => {
-                    let _ = sender.send(WorkerEvent::Failed(session, WorkerError::Remote(error)));
-                    return;
-                }
-            };
-            if worker_cancel.load(Ordering::Relaxed) {
-                let _ = sender.send(WorkerEvent::Failed(
-                    session,
-                    WorkerError::Remote(RemoteError::Cancelled),
-                ));
-                return;
-            }
-            let answer = client.stream_chat(session.messages(), |text| {
-                if worker_cancel.load(Ordering::Relaxed) {
-                    return Err(RemoteError::Cancelled);
-                }
-                sender
-                    .send(WorkerEvent::Token(text.to_owned()))
-                    .map_err(|_| RemoteError::Cancelled)
-            });
-            match answer {
-                Ok(_) if worker_cancel.load(Ordering::Relaxed) => {
-                    let _ = sender.send(WorkerEvent::Failed(
-                        session,
-                        WorkerError::Remote(RemoteError::Cancelled),
-                    ));
-                }
-                Ok(answer) => {
-                    if session.push(Role::Assistant, answer).is_err() {
-                        let _ = sender.send(WorkerEvent::Failed(
-                            session,
-                            WorkerError::Remote(RemoteError::ResponseLimit),
-                        ));
-                    } else {
-                        let _ = sender.send(WorkerEvent::Finished(session));
-                    }
-                }
-                Err(error) => {
-                    let _ = sender.send(WorkerEvent::Failed(session, WorkerError::Remote(error)));
-                }
-            }
-        });
-        self.worker = Some(receiver);
-        self.cancel = Some(cancel);
+        self.generation = Some(generation);
     }
 
     fn tick(&mut self) {
+        self.tick_profile_install();
         loop {
-            let event = match self.worker.as_ref().map(Receiver::try_recv) {
-                Some(Ok(event)) => event,
-                Some(Err(TryRecvError::Empty)) | None => break,
-                Some(Err(TryRecvError::Disconnected)) => {
-                    self.worker = None;
-                    self.cancel = None;
+            let event = match self.generation.as_ref().map(Generation::poll) {
+                Some((GenerationPoll::Event, Some(event))) => event,
+                Some((GenerationPoll::Pending, None)) | None => break,
+                Some((GenerationPoll::Disconnected, None)) => {
+                    self.generation = None;
                     self.activity = Activity::Ready;
                     self.session = Some(Session::new(self.workspace.clone()));
                     self.error(
@@ -336,29 +404,70 @@ impl App {
                     );
                     break;
                 }
+                Some(_) => unreachable!("generation poll state and event are consistent"),
             };
             match event {
-                WorkerEvent::Token(text) => {
-                    self.partial_answer.push_str(&text);
+                GenerationEvent::Token(text) => {
+                    self.partial_answer.push_str(text.as_str());
                     self.scroll = u16::MAX;
                 }
-                WorkerEvent::Finished(session) => {
+                GenerationEvent::Finished(session) => {
                     self.finish_partial();
                     self.session = Some(session);
-                    self.worker = None;
-                    self.cancel = None;
+                    self.generation = None;
                     self.activity = Activity::Ready;
                     break;
                 }
-                WorkerEvent::Failed(session, error) => {
+                GenerationEvent::Failed(session, error) => {
                     self.finish_partial();
                     self.session = Some(session);
-                    self.worker = None;
-                    self.cancel = None;
+                    self.generation = None;
                     self.activity = Activity::Ready;
                     self.error(worker_error_message(error));
                     break;
                 }
+            }
+        }
+    }
+
+    fn tick_profile_install(&mut self) {
+        let result = match self.profile_worker.as_ref().map(Receiver::try_recv) {
+            Some(Ok(result)) => result,
+            Some(Err(TryRecvError::Empty)) | None => return,
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.profile_worker = None;
+                self.profile_cancel = None;
+                self.activity = Activity::Ready;
+                if let Some(onboarding) = &mut self.onboarding {
+                    onboarding.step = OnboardingStep::ApiKey;
+                }
+                self.error("Profile verification worker ended unexpectedly; nothing was saved.");
+                return;
+            }
+        };
+        self.profile_worker = None;
+        self.profile_cancel = None;
+        self.activity = Activity::Ready;
+        match result {
+            Ok(profile) => {
+                self.profiles.push(profile.clone());
+                self.selected = Some(self.profiles.len() - 1);
+                self.session = Some(Session::new(self.workspace.clone()));
+                self.onboarding = None;
+                self.notice(format!(
+                    "Saved and selected profile '{}'. Conversation context is empty.",
+                    profile.name()
+                ));
+            }
+            Err(ProfileInstallError::Cancelled) => {
+                self.onboarding = None;
+                self.notice("Remote setup cancelled; no profile or credential was saved.");
+            }
+            Err(error) => {
+                if let Some(onboarding) = &mut self.onboarding {
+                    onboarding.step = OnboardingStep::ApiKey;
+                }
+                self.error(profile_install_error_message(error));
             }
         }
     }
@@ -374,9 +483,20 @@ impl App {
     }
 
     fn cancel(&mut self) {
-        if let Some(cancel) = &self.cancel {
-            cancel.store(true, Ordering::Relaxed);
-            self.activity = Activity::Cancelling;
+        match self.activity {
+            Activity::Generating | Activity::Cancelling => {
+                if let Some(generation) = &self.generation {
+                    generation.cancel();
+                    self.activity = Activity::Cancelling;
+                }
+            }
+            Activity::VerifyingProfile | Activity::CancellingProfile => {
+                if let Some(cancellation) = &self.profile_cancel {
+                    cancellation.cancel();
+                    self.activity = Activity::CancellingProfile;
+                }
+            }
+            Activity::Ready => {}
         }
     }
 
@@ -393,6 +513,7 @@ impl App {
                 }
             }
             (KeyCode::Esc, _) if self.activity != Activity::Ready => self.cancel(),
+            (KeyCode::Esc, _) if self.onboarding.is_some() => self.cancel_onboarding(),
             (KeyCode::Esc, _) => {
                 self.input.zeroize();
                 self.input.clear();
@@ -418,37 +539,86 @@ impl App {
     }
 }
 
-fn worker_error_message(error: WorkerError) -> &'static str {
+fn worker_error_message(error: ChatError) -> &'static str {
     match error {
-        WorkerError::Credential(CredentialError::Unavailable) => {
+        ChatError::Credential(CredentialError::Unavailable) => {
             "Credential missing or OS credential service unavailable."
         }
-        WorkerError::Credential(_) => {
+        ChatError::Credential(_) => {
             "OS credential service denied access; no plaintext fallback was used."
         }
-        WorkerError::Remote(RemoteError::Cancelled) => {
+        ChatError::Remote(RemoteError::Cancelled) => {
             "Response cancelled. Partial text, if any, is not added to model context."
         }
-        WorkerError::Remote(RemoteError::UnsafeEndpoint) => {
+        ChatError::Remote(RemoteError::UnsafeEndpoint) => {
             "Endpoint failed the HTTPS/private-address policy."
         }
-        WorkerError::Remote(RemoteError::Authentication) => "Remote authentication failed.",
-        WorkerError::Remote(RemoteError::ModelUnavailable) => {
+        ChatError::Remote(RemoteError::Authentication) => "Remote authentication failed.",
+        ChatError::Remote(RemoteError::ModelUnavailable) => {
             "The configured upstream model is unavailable."
         }
-        WorkerError::Remote(RemoteError::ResponseLimit) => {
+        ChatError::Remote(RemoteError::ResponseLimit) | ChatError::HistoryFull => {
             "Remote response exceeded a safety limit."
         }
-        WorkerError::Remote(RemoteError::Connection | RemoteError::Resolution) => {
+        ChatError::Remote(RemoteError::Connection | RemoteError::Resolution) => {
             "Remote connection or DNS resolution failed."
         }
-        WorkerError::Remote(RemoteError::Upstream) => {
+        ChatError::Remote(RemoteError::Upstream) => {
             "Remote endpoint returned an error or redirect."
         }
-        WorkerError::Remote(RemoteError::InvalidProfile | RemoteError::InvalidResponse) => {
+        ChatError::Remote(RemoteError::InvalidProfile | RemoteError::InvalidResponse) => {
             "Remote profile or response was invalid."
         }
-        WorkerError::Remote(RemoteError::Output) => "Internal response delivery failed.",
+        ChatError::Remote(RemoteError::Output) | ChatError::Delivery => {
+            "Internal response delivery failed."
+        }
+    }
+}
+
+fn profile_install_error_message(error: ProfileInstallError) -> &'static str {
+    match error {
+        ProfileInstallError::Config(io::ErrorKind::AlreadyExists) => {
+            "That profile name already exists. Setup was not saved; cancel and choose another name."
+        }
+        ProfileInstallError::Config(io::ErrorKind::PermissionDenied) => {
+            "Configuration access was denied. Check user-only ownership and permissions."
+        }
+        ProfileInstallError::Config(_) => {
+            "Configuration could not be safely updated; no plaintext credential fallback was used."
+        }
+        ProfileInstallError::Credential(CredentialError::Unavailable) => {
+            "The OS credential service is unavailable. The API key was not saved."
+        }
+        ProfileInstallError::Credential(_) => {
+            "The OS credential service denied access. The API key was not saved."
+        }
+        ProfileInstallError::Remote(RemoteError::UnsafeEndpoint) => {
+            "Endpoint failed the HTTPS/private-address policy. API key input was discarded."
+        }
+        ProfileInstallError::Remote(RemoteError::Authentication) => {
+            "Remote authentication failed. API key input was discarded; enter it again to retry."
+        }
+        ProfileInstallError::Remote(RemoteError::ModelUnavailable) => {
+            "The model was not listed by the endpoint. Cancel setup to change the model ID."
+        }
+        ProfileInstallError::Remote(RemoteError::Connection | RemoteError::Resolution) => {
+            "Remote connection or DNS resolution failed. API key input was discarded."
+        }
+        ProfileInstallError::Remote(RemoteError::Upstream) => {
+            "Remote endpoint returned an error or redirect. API key input was discarded."
+        }
+        ProfileInstallError::Remote(RemoteError::InvalidProfile | RemoteError::InvalidResponse) => {
+            "Remote profile or verification response was invalid. Nothing was saved."
+        }
+        ProfileInstallError::Remote(RemoteError::ResponseLimit) => {
+            "Remote verification exceeded a safety limit. Nothing was saved."
+        }
+        ProfileInstallError::Remote(RemoteError::Cancelled) | ProfileInstallError::Cancelled => {
+            "Remote setup was cancelled. Nothing was saved."
+        }
+        ProfileInstallError::Remote(RemoteError::Output) => {
+            "Internal verification delivery failed. Nothing was saved."
+        }
     }
 }
 
@@ -531,20 +701,30 @@ fn render(frame: &mut Frame<'_>, app: &App) {
         areas[1],
     );
 
-    let input_line_count = app.input.lines().count().max(1);
+    let onboarding_step = app.onboarding.as_ref().map(|onboarding| onboarding.step);
+    let masked_input = (onboarding_step == Some(OnboardingStep::ApiKey))
+        .then(|| "•".repeat(app.input.chars().count()));
+    let displayed_input = masked_input.as_deref().unwrap_or(app.input.as_str());
+    let composer_title = match onboarding_step {
+        Some(OnboardingStep::Name) => " Remote setup 1/4 · Profile name · Esc cancel ",
+        Some(OnboardingStep::Url) => " Remote setup 2/4 · Endpoint URL · Esc cancel ",
+        Some(OnboardingStep::Model) => " Remote setup 3/4 · Model ID · Esc cancel ",
+        Some(OnboardingStep::ApiKey) => {
+            " Remote setup 4/4 · API key (hidden, optional) · Esc cancel "
+        }
+        Some(OnboardingStep::Verifying) => " Verifying remote profile · Esc cancel ",
+        None => " Message · Enter send · Alt+Enter newline ",
+    };
+    let input_line_count = displayed_input.lines().count().max(1);
     let input_scroll = input_line_count.saturating_sub(2) as u16;
     frame.render_widget(
-        Paragraph::new(app.input.as_str())
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Message · Enter send · Alt+Enter newline "),
-            )
+        Paragraph::new(displayed_input)
+            .block(Block::default().borders(Borders::ALL).title(composer_title))
             .scroll((input_scroll, 0))
             .wrap(Wrap { trim: false }),
         areas[2],
     );
-    let last_line = app.input.rsplit('\n').next().unwrap_or("");
+    let last_line = displayed_input.rsplit('\n').next().unwrap_or("");
     let cursor_width = UnicodeWidthStr::width(last_line) as u16;
     let cursor_x = areas[2]
         .x
@@ -562,6 +742,8 @@ fn render(frame: &mut Frame<'_>, app: &App) {
         Activity::Ready => "Ready",
         Activity::Generating => "Generating… Esc cancels",
         Activity::Cancelling => "Cancelling…",
+        Activity::VerifyingProfile => "Verifying profile… Esc requests cancellation",
+        Activity::CancellingProfile => "Cancelling profile setup…",
     };
     frame.render_widget(
         Paragraph::new(format!(
@@ -584,6 +766,7 @@ impl Drop for TerminalGuard {
 
 pub fn run(
     workspace: Workspace,
+    paths: AppPaths,
     profiles: Vec<RemoteProfile>,
     selected_name: Option<&str>,
 ) -> io::Result<()> {
@@ -592,7 +775,7 @@ pub fn run(
     execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
-    let mut app = App::new(workspace, profiles, selected_name);
+    let mut app = App::new(workspace, paths, profiles, selected_name);
     while !app.quit {
         app.tick();
         terminal.draw(|frame| render(frame, &app))?;
@@ -629,11 +812,21 @@ mod tests {
     fn app() -> (tempfile::TempDir, App) {
         let dir = tempfile::tempdir().unwrap();
         let workspace = Workspace::open(dir.path()).unwrap();
+        let paths = test_paths(&dir);
         let profiles = vec![
             RemoteProfile::new("one", "https://one.example", "model-1", false).unwrap(),
             RemoteProfile::new("two", "https://two.example", "model-2", false).unwrap(),
         ];
-        (dir, App::new(workspace, profiles, Some("one")))
+        (dir, App::new(workspace, paths, profiles, Some("one")))
+    }
+
+    fn test_paths(dir: &tempfile::TempDir) -> AppPaths {
+        AppPaths::new(
+            dir.path().join("config"),
+            dir.path().join("data"),
+            dir.path().join("cache"),
+        )
+        .unwrap()
     }
 
     fn command(app: &mut App, value: &str) {
@@ -663,10 +856,12 @@ mod tests {
     fn missing_profiles_and_planned_commands_fail_without_starting_work() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = Workspace::open(dir.path()).unwrap();
-        let mut app = App::new(workspace, Vec::new(), None);
+        let paths = test_paths(&dir);
+        let mut app = App::new(workspace, paths, Vec::new(), None);
+        app.cancel_onboarding();
         command(&mut app, "hello");
         assert_eq!(app.activity, Activity::Ready);
-        assert!(app.worker.is_none());
+        assert!(app.generation.is_none());
         command(&mut app, "/files");
         assert!(matches!(
             app.transcript.last().unwrap().kind,
@@ -707,14 +902,76 @@ mod tests {
     #[test]
     fn escape_requests_cancellation_while_generation_is_active() {
         let (_dir, mut app) = app();
-        let cancel = Arc::new(AtomicBool::new(false));
-        app.cancel = Some(Arc::clone(&cancel));
+        struct WaitingBackend;
+
+        impl dociler_core::chat::ChatBackend for WaitingBackend {
+            fn stream(
+                self: Box<Self>,
+                _: &[dociler_core::session::Message],
+                cancellation: &dociler_core::chat::CancellationToken,
+                _: &mut dyn FnMut(&str) -> Result<(), ChatError>,
+            ) -> Result<String, ChatError> {
+                while !cancellation.is_cancelled() {
+                    std::thread::yield_now();
+                }
+                Err(ChatError::Remote(RemoteError::Cancelled))
+            }
+        }
+
+        let session = app.session.take().unwrap();
+        app.generation =
+            Generation::start(session, "hello".to_owned(), Box::new(WaitingBackend)).ok();
         app.activity = Activity::Generating;
 
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-        assert!(cancel.load(Ordering::Relaxed));
+        assert!(app.generation.as_ref().unwrap().is_cancel_requested());
         assert_eq!(app.activity, Activity::Cancelling);
         assert!(!app.quit);
+    }
+
+    #[test]
+    fn onboarding_validates_fields_and_masks_api_key_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::open(dir.path()).unwrap();
+        let paths = test_paths(&dir);
+        let mut app = App::new(workspace, paths, Vec::new(), None);
+        assert_eq!(app.onboarding.as_ref().unwrap().step, OnboardingStep::Name);
+
+        command(&mut app, "bad name");
+        assert_eq!(app.onboarding.as_ref().unwrap().step, OnboardingStep::Name);
+        command(&mut app, "office");
+        assert_eq!(app.onboarding.as_ref().unwrap().step, OnboardingStep::Url);
+        command(&mut app, "https://example.com/v1");
+        assert_eq!(app.onboarding.as_ref().unwrap().step, OnboardingStep::Model);
+        command(&mut app, "upstream-model");
+        assert_eq!(
+            app.onboarding.as_ref().unwrap().step,
+            OnboardingStep::ApiKey
+        );
+        app.input.push_str("do-not-render");
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!text.contains("do-not-render"));
+        assert!(text.contains("••••"));
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.onboarding.is_none());
+        assert!(app.input.is_empty());
+        assert!(!dir.path().join("config").exists());
+
+        command(&mut app, "/connect add");
+        command(&mut app, "/exit");
+        assert!(app.quit);
+        assert!(!dir.path().join("config").exists());
     }
 }

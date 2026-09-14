@@ -8,8 +8,8 @@ LLM or a user-configured OpenAI-compatible API.
 > help, version, workspace diagnostics, and validated settings with explicit
 > initialization. Remote OpenAI-compatible profile verification and streamed
 > one-shot text chat are available. An initial memory-only, multi-turn terminal
-> interface is also available for saved remote profiles. First-run onboarding,
-> local inference, and document analysis are not implemented yet.
+> interface and remote-profile onboarding are also available. Local backend
+> onboarding, local inference, and document analysis are not implemented yet.
 
 The first release is scoped to word-processing documents: Markdown (`.md`),
 PDF (`.pdf`), modern and legacy Word (`.docx`, `.doc`), Rich Text Format

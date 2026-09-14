@@ -158,22 +158,24 @@ more incompatible endpoints than a health probe alone. See
 URL-embedded credentials, API keys in JSON, and Linux integrations requiring a
 development `libdbus` package.
 
-## ADR-014: Native event-loop TUI with isolated blocking generation
+## ADR-014: Native event-loop TUI with isolated generation
 
 **Decision:** Implement the first terminal surface with pinned Ratatui 0.29 and
 Crossterm 0.28, preserving separate non-interactive commands. Keep terminal
-events/rendering on the main thread and move each blocking remote generation to
-a worker thread connected by an in-process channel. Hold transcript, prompt,
+events/rendering on the main thread and move each remote generation to a worker
+thread connected by an in-process channel. Hold transcript, prompt,
 partial output, and model session only in memory, with best-effort zeroization.
 
 **Why:** These versions retain the Rust 1.85 baseline, support deterministic
 off-screen rendering tests, and restore terminal state through a small native
 adapter. A background worker keeps streamed text and cancellation input
-responsive without introducing an async runtime before the broader application
-orchestrator exists. Refusing the TUI when stdin/stdout are not terminals keeps
-automation output stable and free of control sequences.
+responsive. The provider-independent controller owns session commit, and a
+current-thread Tokio runtime confined to each remote worker makes model
+verification and generation transports abortable without a process-global
+runtime. Refusing the TUI when stdin/stdout are not terminals keeps automation
+output stable and free of control sequences.
 
 **Rejected:** Replacing scriptable commands with a terminal-only UI, persisting
 transcripts, silently falling back from failed TUI setup, and introducing a
-browser/Electron frontend. The current cooperative cancellation is an interim
-M3 boundary, not a rejection of transport-level abort handling.
+browser/Electron frontend. Blocking DNS and OS credential calls remain explicit
+platform boundaries rather than reasons to weaken endpoint or secret policy.

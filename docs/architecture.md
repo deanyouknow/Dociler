@@ -168,10 +168,14 @@ See [Remote providers](remote-providers.md). The executable now has a thin
 Ratatui/Crossterm terminal adapter whose in-memory state owns the transcript,
 composer, selected profile, and bounded session. Remote generation runs on one
 background thread per turn and sends bounded fragments back over a channel, so
-terminal drawing/input are not blocked by ordinary streaming. Cancellation is
-currently cooperative at fragment delivery; transport-level abort remains M3
-hardening. Provider policy and HTTP parsing remain in `dociler-core`; onboarding,
-skills, documents, and local orchestration are still future layers.
+terminal drawing/input are not blocked by ordinary streaming. A
+provider-independent controller owns cancellation and session commit. The
+remote adapter uses a worker-local current-thread async runtime; cancellation
+drops active model-listing, verification-generation, or chat transports even if
+the peer has stopped sending. Blocking OS DNS and credential calls are not yet
+interruptible. Provider policy, profile installation, and HTTP parsing remain
+in `dociler-core`; local onboarding, skills, documents, and local orchestration
+are still future layers.
 
 ## Failure containment
 

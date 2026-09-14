@@ -6,15 +6,18 @@ M1 provides a Cargo workspace, a basic executable, shared diagnostics, CLI
 integration tests, and GitHub Actions. M2 adds OS paths, validated JSON settings,
 explicit no-clobber initialization, canonical workspace policy lookup, bounded
 memory-only sessions, and a credential-store interface. M3 adds verified remote
-profiles, OS keychain integration, streamed one-shot chat, and an initial
-interactive multi-turn terminal surface. First-run TUI onboarding, inference,
-document processing, and serving remain future work. See
+profiles, OS keychain integration, streamed one-shot chat, a provider-independent
+generation controller, cancellable HTTP, and an initial interactive multi-turn
+terminal surface with remote onboarding. Local onboarding, inference, document
+processing, and serving remain future work. See
 [Configuration](configuration.md) and
 [Remote providers](remote-providers.md) for commands and boundaries.
 
 Direct dependencies are pinned: directories 6.0.0, Serde 1.0.219, serde_json
 1.0.140, tempfile 3.19.1, zeroize 1.8.1, URL 2.5.4, Reqwest 0.12.23,
 keyring 3.6.3, Ratatui 0.29.0, Crossterm 0.28.1, and Unicode Width 0.2.0.
+Futures Util 0.3.34 and Tokio 1.53.1 support cancellable remote I/O without a
+process-global runtime.
 The lockfile pins transitives. These
 are deliberate Rust-1.85-compatible baseline pins, not claims to be the latest
 releases. Dependency vulnerability/license audits remain release work.

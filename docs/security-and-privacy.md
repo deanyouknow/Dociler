@@ -43,7 +43,10 @@ The first M3 remote client enforces the transport subset before any request: it
 requires HTTPS except for all-private/all-loopback DNS results, pins resolved
 addresses into a proxy-free client, disables redirects, bounds response parsing,
 and emits sanitized error classes. See [Remote providers](remote-providers.md).
-Document content cannot enter this path yet. Cross-platform DNS/TLS/keychain
+Chat and profile verification use cancellable async HTTP on isolated generation
+workers; dropping a stalled request is covered by a loopback test. OS DNS and
+credential-service calls remain blocking platform boundaries. Document content
+cannot enter this path yet. Cross-platform DNS/TLS/keychain
 runtime validation and redirect/rebinding adversarial coverage remain release
 gates rather than implied guarantees.
 

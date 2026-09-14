@@ -1,14 +1,14 @@
 # Project Checkpoint
 
-Last updated: 2026-09-14T00:46:47Z
+Last updated: 2026-09-14T01:11:24Z
 
 ## Current status
 
-**Status:** M3 initial interactive terminal locally implemented and verified;
-onboarding and cancellation hardening pending.
+**Status:** M3 remote onboarding, provider-independent generation, and
+cancellable HTTP locally implemented and verified; lifecycle/platform hardening pending.
 
-**Active milestone:** M3 — Terminal onboarding and remote text chat (remote and
-initial terminal foundations complete; onboarding/hardening pending).
+**Active milestone:** M3 — Terminal onboarding and remote text chat (primary
+remote flow complete locally; profile lifecycle and platform hardening pending).
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
 `dociler` executable with help, version, workspace/platform diagnostics, config
@@ -19,10 +19,13 @@ services for optional keys, verifies OpenAI-compatible model listing and minimal
 generation, and streams one text response from stdin with memory-only history.
 It now also opens an initial interactive terminal UI on a real TTY, maintains a
 bounded multi-turn session in memory, renders streamed output without blocking
-ordinary input, exposes core slash commands, and requests cancellation. It has
-no first-run wizard/in-TUI profile creation, document parsing, local model/runtime
-integration, settings/grant update UI, or Dociler API yet. The five-platform CI
-workflow is defined; its hosted result could not be retrieved from this environment.
+ordinary input, exposes core slash commands, and aborts active HTTP requests on
+cancellation. A profile-free launch and `/connect add` now provide verified
+remote setup with masked optional key entry and native-only credential storage.
+It has no local-backend onboarding, profile edit/removal/key rotation, document
+parsing, local model/runtime integration, settings/grant update UI, or Dociler
+API yet. The five-platform CI workflow is defined; its hosted result could not
+be retrieved from this environment.
 
 ## Completed
 
@@ -68,31 +71,44 @@ workflow is defined; its hosted result could not be retrieved from this environm
   interactive launch and `chat [PROFILE]`, while non-terminal bare launch remains
   plain help and the existing one-shot commands remain stable.
 - Added memory-only multi-turn remote chat, streaming partial output, background
-  generation, cooperative Escape/Ctrl+C cancellation, bounded Unicode input and
+  generation, Escape/Ctrl+C cancellation, bounded Unicode input and
   paste, terminal-state restoration, scrolling, and continuously visible
   workspace/profile/read-only/memory-only/API-off state.
 - Added working `/help`, `/status`, saved-profile `/connect`, confirmed `/clear`,
   and `/exit`; unimplemented planned commands fail visibly. Added five terminal
   state/render tests, bringing the current Linux suite to 33 tests.
 - Documented the implemented terminal boundary, operational commands,
-  dependency pins, remaining UX gaps, cancellation limitation, and ADR-014.
+  dependency pins, remaining UX gaps, and ADR-014.
+- Extracted a provider-independent generation controller that owns bounded
+  session commits, zeroizing fragment delivery, worker failure containment, and
+  cancellation; deterministic fake backends cover successful and cancelled turns.
+- Added worker-local cancellable async Reqwest transport for model discovery,
+  minimal verification generation, and streamed chat. Cancellation now drops a
+  stalled HTTP response instead of waiting for the 120-second request timeout.
+- Added verified in-TUI remote onboarding on first profile-free launch and
+  `/connect add`: validated name/URL/model steps, optional masked API key, no
+  save before both verification checks, native credential storage, and rollback
+  on configuration failure or pre-commit cancellation.
+- Centralized CLI and TUI profile installation in a tested core service; added
+  seven tests across controller, onboarding/profile transaction, async SSE, and
+  stalled-transport cancellation, bringing the Linux suite to 40 tests.
 
 ## Work in progress
 
-None for this bounded progress unit. M3 still has required onboarding and
+None for this bounded progress unit. M3 still has profile lifecycle and platform
 hardening work. M1–M3 hosted/native execution remains unverified outside this
 Linux x86-64 environment.
 
 ## Next recommended task
 
-Continue M3 with a provider-independent generation controller that supports a
-deterministic fake backend and transport-level abort, then add first-run/in-TUI
-remote onboarding with hidden key entry and safe profile creation. Add real
-pseudo-terminal interaction tests for input/render/resize/cancellation and test
-target-platform terminal cleanup. Preserve the non-interactive commands as
-automation interfaces. Run/review hosted CI with valid GitHub access. Do not add
-documents or local model downloads until this text-only terminal path is stable.
-Implementation remains authorized.
+Finish M3 profile lifecycle behavior: safe remove and key rotation, onboarding
+back/edit/retry controls, refreshed profile state after concurrent changes, and
+actionable reconnect status. Add pseudo-terminal tests backed by a mock provider
+for successful onboarding/chat/cancellation and cover resize/terminal cleanup.
+Validate real Keychain/Credential Manager/Secret Service behavior and hosted
+platform CI when access is available. Preserve non-interactive automation. Do
+not add documents or local model downloads until this text-only terminal path is
+stable. Implementation remains authorized.
 
 ## Blockers
 
@@ -134,14 +150,56 @@ rustup setup described in `docs/development.md` on other machines.
 - One-shot remote prompts are UTF-8 stdin only (64 KiB maximum); streamed answer
   text is capped at 1 MiB and remains memory-only unless the caller redirects it.
 - ADR-014: the M3 terminal uses pinned Ratatui 0.29/Crossterm 0.28 on the main
-  event/render thread and an in-process worker/channel for blocking generation.
+  event/render thread and an in-process worker/channel for generation.
   Bare non-terminal use remains plain help; prompt, transcript, and partial
   output remain memory-only with best-effort zeroization.
-- Current cancellation is cooperative at stream-fragment delivery. A fully
-  stalled blocking request relies on the 120-second transport timeout until an
-  abort-capable controller replaces this interim boundary.
+- Remote generation and profile verification use a worker-local current-thread
+  Tokio runtime with 20 ms cancellation observation; dropping the request aborts
+  peer-stalled HTTP. OS DNS resolution and credential-service calls remain
+  blocking platform boundaries.
+- Profile installation re-loads current validated settings, verifies before
+  mutation, stores any key only in the native credential service, atomically
+  saves non-secret settings, and best-effort deletes a newly stored key if save
+  or pre-commit cancellation fails.
 
 ## Verification
+
+### M3 controller, cancellable transport, and remote onboarding — 2026-09-14
+
+Local checks used the isolated Rust 1.85.1 environment. Mock providers bind only
+ephemeral `127.0.0.1` ports and make no public-provider requests.
+
+- **passed:** `cargo fmt --all -- --check`.
+- **passed:** `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`.
+- **passed:** `cargo test --workspace --all-targets --locked --offline`: 40 tests
+  (6 terminal, 11 CLI, 7 core unit, 11 foundation, 5 mock remote integration).
+- **passed:** `cargo test --workspace --all-targets --release --locked --offline`:
+  the same 40 tests against optimized code.
+- **passed:** deterministic fake-backend completion/cancellation, profile and
+  credential separation, cancellation-before/during-verification with no writes,
+  cancellable Unicode SSE, and peer-stalled transport abort in under one second.
+- **passed:** `cargo test --workspace --doc --locked --offline`: no doctests yet;
+  `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked --offline`.
+- **passed:** `cargo build --workspace --release --locked --offline`; release
+  doctor and redirected bare-launch smoke runs.
+- **passed:** pseudo-terminal traversal through profile name, URL, model, and
+  hidden-key step followed by `/exit`; exit code 0 and no configuration created.
+- **passed:** `python3 scripts/check_docs.py`: 16 Markdown files, 27 relative
+  links, title/heading/fence checks, and README coverage; `git diff --check`.
+- **failed then resolved:** the first offline check lacked the newly enabled
+  Reqwest stream dependency; an authorized Cargo check resolved the locked
+  `tokio-util` and WASM-target entries and downloaded `tokio-util`, after which
+  all work ran offline.
+- **failed then resolved:** the first stalled-transport test exposed a Tokio
+  runtime with time but not I/O enabled; enabling all runtime drivers made the
+  focused and full cancellation suites pass.
+- **not run:** successful TUI onboarding against a live provider/native keychain;
+  live-provider chat/cancellation; blocking DNS or credential-call interruption;
+  full mock-backed pseudo-terminal conversation; resize; macOS/Windows/Linux
+  ARM64 and hosted CI.
+- **not run:** profile removal/rotation, local models, documents, LAN API,
+  constrained-memory/model qualification, installers, audits, supply chain, and
+  later release gates. No models or inference runtimes were downloaded.
 
 ### M3 initial interactive terminal — 2026-09-14
 
@@ -292,3 +350,5 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-14T00:27:39Z | Codex `/root` | Continue authorized M3 interactive integration | Add chat controller, terminal surface, core slash commands, visible state, deterministic fake-backend tests, docs and handoff; existing checkpoint-only change is prior agent work | Cargo manifests/lock, core chat/session services, CLI terminal modules/tests, README, docs/, CHECKPOINT.md | not run: interactive M3 checks pending | IN PROGRESS | Implement terminal chat without documents, local models, LAN serving, or persistent transcripts |
 | 2026-09-14T00:44:17Z | Codex `/root` | Complete initial M3 interactive terminal integration | Added real-TTY launch/chat routing, memory-only multi-turn state, background streaming, cooperative cancellation, core commands, terminal restoration/rendering, five TUI tests, dependency pins, docs and ADR-014; resolves prior in-progress entry, except fake-backend/controller extraction is handed forward explicitly | Cargo manifests/lock, `dociler` main/TUI/tests, core remote errors, README, architecture/CLI/development/remote/testing/decision docs, CHECKPOINT.md | passed: fmt, Clippy, 33 debug and release tests, Rust docs, release build/non-TTY smoke, delayed-input PTY exit, Markdown and diff checks; failed then resolved: clipped test header and early PTY input; not run: live/manual/platform/provider/fake-backend/stalled-abort/later gates | INITIAL TERMINAL FOUNDATION COMPLETE; M3 REMAINS ACTIVE | Extract abort-capable provider-independent controller, add deterministic fake backend and in-TUI onboarding/hidden credentials, then broaden PTY/platform checks |
 | 2026-09-14T00:46:47Z | Codex `/root` | Harden cancellation handoff after final review | Added cancellation checks after credential lookup/client creation and before committing a completed answer, preventing a late cancel from entering model context; records follow-up to the 00:44 entry | `crates/dociler/src/tui.rs`, CHECKPOINT.md | passed: fmt, Clippy, 33 debug tests, 33 optimized tests, release rebuild/doctor/non-TTY help, final delayed-input PTY exit, Markdown and diff checks | COMPLETE | Transport-level abort and deterministic fake-backend coverage remain the next M3 hardening task |
+| 2026-09-14T00:49:25Z | Codex `/root` | Continue authorized M3 controller/onboarding integration | Extract provider-independent generation control with deterministic cancellation tests, then add safe in-TUI remote onboarding and hidden credential input within existing policy; preserve all current uncommitted M3 work | Core/controller, terminal state/rendering, configuration/credential adapters, tests, README/docs, CHECKPOINT.md | not run: integration checks pending | IN PROGRESS | Complete this bounded M3 hardening/onboarding unit without documents, local models, LAN serving, or persisted transcripts |
+| 2026-09-14T01:11:24Z | Codex `/root` | Complete M3 controller, cancellable transport, and remote onboarding unit | Added provider-independent generation/session controller, zeroizing events, cancellable async verification/chat transport, transactional profile installer shared by CLI/TUI, automatic and `/connect add` four-step onboarding with masked optional key, tests and docs; resolves 00:49 entry | Cargo manifests/lock, core cancellation/chat/profile/remote modules and tests, CLI/TUI/tests, README, architecture/CLI/development/remote/privacy/testing/decision docs, CHECKPOINT.md | passed: fmt, Clippy, 40 debug and optimized tests, doctests/docs, release build/smoke, onboarding PTY/no-write check, Markdown/diff; failed then resolved: missing stream dependency offline and Tokio I/O driver; not run: live keychains/providers/platform CI/full PTY conversation/profile lifecycle/later gates | COMPLETE; M3 REMAINS ACTIVE | Add safe profile remove/key rotation and onboarding edit/retry, then mock-backed PTY chat/cancel/resize and platform validation |

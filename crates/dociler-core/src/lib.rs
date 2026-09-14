@@ -3,10 +3,13 @@
 //! Configuration contains only preferences and approved workspace identities;
 //! session content and credentials are deliberately not serializable settings.
 
+pub mod cancellation;
+pub mod chat;
 pub mod config;
 pub mod credentials;
 pub mod diagnostics;
 pub mod paths;
+pub mod profiles;
 pub mod remote;
 pub mod session;
 pub mod workspace;

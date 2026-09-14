@@ -54,19 +54,24 @@ dociler chat office
 ```
 
 If a profile name is omitted, Dociler selects the first saved profile. Use
-`/connect` to list profiles or `/connect NAME` to switch; switching resets model
-context. `/status`, `/help`, the two-step `/clear`, and `/exit` are also active.
+`/connect` to list profiles, `/connect NAME` to switch, or `/connect add` for the
+four-step profile wizard; switching resets model context. `/status`, `/help`,
+the two-step `/clear`, and `/exit` are also active.
 History and rendered transcript remain only in process memory. A redirected
 bare invocation prints help, and `chat` refuses to start without terminal input
 and output, so scripts do not receive terminal control sequences.
 
+The wizard collects a profile name, endpoint URL, exact model ID, and optional
+API key. Key input is masked, held in zeroizing memory, and discarded after the
+attempt. Verification and streamed chat use a cancellable async HTTP path, so
+Escape/Ctrl+C drops even a stalled request rather than waiting for the 120-second
+request timeout. Cancellation after response fragments leaves partial output
+visible but never adds it to subsequent model context. OS DNS lookup and native
+credential-store calls are still blocking platform operations.
+
 Profiles are add-only in this integration. Duplicate names fail without
-replacement. Profile removal, key rotation, interactive hidden key entry,
-first-run onboarding, reconnect UI, and upstream profile editing are still
-pending. Escape or Ctrl+C requests cancellation while a response streams, but
-the current blocking transport observes it only when another stream fragment
-arrives; a fully stalled connection relies on the 120-second request timeout.
-Partial output remains visible but is not added to subsequent model context.
+replacement. Profile removal, key rotation, reconnect UI, and upstream profile
+editing are still pending.
 
 ## Endpoint policy
 
@@ -112,7 +117,8 @@ not supported yet.
 
 ## Dependency boundary
 
-Remote HTTP uses pinned Reqwest 0.12.23 with rustls. The terminal uses pinned
+Remote HTTP uses pinned Reqwest 0.12.23 with rustls, Futures Util 0.3.34, and
+Tokio 1.53.1 for a worker-local cancellable transport. The terminal uses pinned
 Ratatui 0.29.0 with Crossterm 0.28.1 and Unicode Width 0.2.0. Credential
 integration uses pinned keyring 3.6.3: native Apple/Windows stores and the pure-Rust async Secret
 Service transport on Linux. The pure-Rust Linux choice avoids requiring users to

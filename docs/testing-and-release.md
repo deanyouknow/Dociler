@@ -141,10 +141,15 @@ Terminal unit tests exercise deterministic slash-command transitions, confirmed
 clearing, profile switching, unavailable-command behavior, bounded input,
 Escape cancellation state, and off-screen rendering through Ratatui's test
 backend. Non-terminal executable tests assert that startup emits no control
-sequences and creates no workspace state. Loopback tests bind only an ephemeral
+sequences and creates no workspace state. A provider-independent fake backend
+tests ordered fragments, successful session commit, and deterministic cancelled
+turns. Profile service tests separate configuration from credentials and prove a
+pre-cancelled install writes nothing. The remote integration suite verifies that
+cancellation drops a peer-stalled HTTP stream before the transport timeout.
+Loopback tests bind only an ephemeral
 `127.0.0.1` port. The CI definition runs native builds/tests across five OS/architecture
 combinations. See `CHECKPOINT.md` for actual local and hosted verification results;
 the existence of a workflow is not evidence that it has run. Later product and
-release gates above remain outstanding. A real pseudo-terminal flow, live
-provider cancellation/stalls, and target-platform terminal behavior are not yet
-covered.
+release gates above remain outstanding. A complete pseudo-terminal onboarding
+flow, live-provider cancellation, blocking DNS/keychain interruption, and
+target-platform terminal behavior are not yet covered.

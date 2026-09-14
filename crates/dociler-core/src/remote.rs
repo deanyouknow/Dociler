@@ -5,11 +5,13 @@ use std::io::{BufRead, BufReader, Read};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
-use reqwest::blocking::{Client, Response};
+use futures_util::StreamExt;
+use reqwest::blocking::{Client as BlockingClient, Response};
 use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
+use crate::cancellation::CancellationToken;
 use crate::credentials::{CredentialId, Secret};
 use crate::session::{Message, Role};
 
@@ -200,7 +202,8 @@ impl ResolvedEndpoint {
 }
 
 pub struct RemoteClient<'a> {
-    client: Client,
+    client: BlockingClient,
+    async_client: reqwest::Client,
     profile: RemoteProfile,
     models_url: Url,
     chat_url: Url,
@@ -221,7 +224,16 @@ impl<'a> RemoteClient<'a> {
             .base_url
             .join("chat/completions")
             .map_err(|_| RemoteError::UnsafeEndpoint)?;
-        let client = Client::builder()
+        let client = BlockingClient::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .user_agent(concat!("dociler/", env!("CARGO_PKG_VERSION")))
+            .resolve_to_addrs(&endpoint.host, &endpoint.addresses)
+            .build()
+            .map_err(|_| RemoteError::Connection)?;
+        let async_client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
@@ -232,6 +244,7 @@ impl<'a> RemoteClient<'a> {
             .map_err(|_| RemoteError::Connection)?;
         Ok(Self {
             client,
+            async_client,
             profile,
             models_url,
             chat_url,
@@ -285,6 +298,53 @@ impl<'a> RemoteClient<'a> {
         Ok(())
     }
 
+    pub fn verify_cancellable(&self, cancellation: &CancellationToken) -> Result<(), RemoteError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| RemoteError::Connection)?;
+        runtime.block_on(self.verify_async(cancellation))
+    }
+
+    async fn verify_async(&self, cancellation: &CancellationToken) -> Result<(), RemoteError> {
+        let response = await_remote(
+            self.request_async(self.async_client.get(self.models_url.clone()))
+                .send(),
+            cancellation,
+        )
+        .await?;
+        let models: ModelsResponse = parse_json_async(response, cancellation).await?;
+        if !models
+            .data
+            .iter()
+            .any(|model| model.id == self.profile.model)
+        {
+            return Err(RemoteError::ModelUnavailable);
+        }
+        let body = serde_json::json!({
+            "model": self.profile.model,
+            "messages": [{"role":"user","content":"Reply with OK."}],
+            "max_tokens": 4,
+            "stream": false
+        });
+        let response = await_remote(
+            self.request_async(self.async_client.post(self.chat_url.clone()))
+                .json(&body)
+                .send(),
+            cancellation,
+        )
+        .await?;
+        let completion: CompletionResponse = parse_json_async(response, cancellation).await?;
+        if !completion
+            .choices
+            .iter()
+            .any(|choice| !choice.message.content.trim().is_empty())
+        {
+            return Err(RemoteError::InvalidResponse);
+        }
+        Ok(())
+    }
+
     pub fn stream_chat(
         &self,
         messages: &[Message],
@@ -325,10 +385,183 @@ impl<'a> RemoteClient<'a> {
         }
         parse_sse(response, &mut output)
     }
+
+    /// Stream with prompt transport cancellation. The internal current-thread
+    /// runtime is confined to the caller's generation worker.
+    pub fn stream_chat_cancellable(
+        &self,
+        messages: &[Message],
+        cancellation: &CancellationToken,
+        mut output: impl FnMut(&str) -> Result<(), RemoteError>,
+    ) -> Result<String, RemoteError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| RemoteError::Connection)?;
+        runtime.block_on(self.stream_chat_async(messages, cancellation, &mut output))
+    }
+
+    async fn stream_chat_async(
+        &self,
+        messages: &[Message],
+        cancellation: &CancellationToken,
+        output: &mut impl FnMut(&str) -> Result<(), RemoteError>,
+    ) -> Result<String, RemoteError> {
+        let messages: Vec<_> = messages
+            .iter()
+            .map(|message| RemoteMessage {
+                role: match message.role() {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                },
+                content: message.text(),
+            })
+            .collect();
+        let body = ChatRequest {
+            model: self.profile.model(),
+            messages: &messages,
+            stream: true,
+        };
+        let request = self
+            .request_async(self.async_client.post(self.chat_url.clone()))
+            .json(&body)
+            .send();
+        let response = await_remote(request, cancellation).await?;
+        check_status_code(response.status().as_u16())?;
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        if !content_type
+            .split(';')
+            .next()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
+        {
+            return Err(RemoteError::InvalidResponse);
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_STREAM_RESPONSE)
+        {
+            return Err(RemoteError::ResponseLimit);
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut pending = Vec::new();
+        let mut total = 0_u64;
+        let mut answer = String::new();
+        loop {
+            if cancellation.is_cancelled() {
+                return Err(RemoteError::Cancelled);
+            }
+            let next = match tokio::time::timeout(Duration::from_millis(20), stream.next()).await {
+                Ok(next) => next,
+                Err(_) => continue,
+            };
+            let chunk = match next {
+                Some(Ok(chunk)) => chunk,
+                Some(Err(_)) => return Err(RemoteError::Connection),
+                None => return Err(RemoteError::InvalidResponse),
+            };
+            total = total.saturating_add(chunk.len() as u64);
+            if total > MAX_STREAM_RESPONSE {
+                return Err(RemoteError::ResponseLimit);
+            }
+            pending.extend_from_slice(&chunk);
+            let mut consumed = 0;
+            while let Some(relative_end) =
+                pending[consumed..].iter().position(|byte| *byte == b'\n')
+            {
+                let end = consumed + relative_end;
+                let mut line = &pending[consumed..end];
+                if line.last() == Some(&b'\r') {
+                    line = &line[..line.len() - 1];
+                }
+                if line.len() > MAX_SSE_LINE {
+                    return Err(RemoteError::ResponseLimit);
+                }
+                if process_sse_line(line, output, &mut answer)? {
+                    return Ok(answer);
+                }
+                consumed = end + 1;
+            }
+            if consumed > 0 {
+                pending.drain(..consumed);
+            }
+            if pending.len() > MAX_SSE_LINE {
+                return Err(RemoteError::ResponseLimit);
+            }
+        }
+    }
+
+    fn request_async(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(secret) = &self.secret {
+            request.bearer_auth(secret.expose())
+        } else {
+            request
+        }
+    }
+}
+
+async fn await_remote<F, T>(future: F, cancellation: &CancellationToken) -> Result<T, RemoteError>
+where
+    F: std::future::Future<Output = Result<T, reqwest::Error>>,
+{
+    let mut future = Box::pin(future);
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(RemoteError::Cancelled);
+        }
+        match tokio::time::timeout(Duration::from_millis(20), &mut future).await {
+            Ok(Ok(value)) => return Ok(value),
+            Ok(Err(_)) => return Err(RemoteError::Connection),
+            Err(_) => {}
+        }
+    }
+}
+
+async fn parse_json_async<T: for<'de> Deserialize<'de>>(
+    response: reqwest::Response,
+    cancellation: &CancellationToken,
+) -> Result<T, RemoteError> {
+    check_status_code(response.status().as_u16())?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_JSON_RESPONSE)
+    {
+        return Err(RemoteError::ResponseLimit);
+    }
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(RemoteError::Cancelled);
+        }
+        let next = match tokio::time::timeout(Duration::from_millis(20), stream.next()).await {
+            Ok(next) => next,
+            Err(_) => continue,
+        };
+        match next {
+            Some(Ok(chunk)) => {
+                if chunk.len() as u64 > MAX_JSON_RESPONSE - bytes.len() as u64 {
+                    return Err(RemoteError::ResponseLimit);
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Some(Err(_)) => return Err(RemoteError::Connection),
+            None => break,
+        }
+    }
+    serde_json::from_slice(&bytes).map_err(|_| RemoteError::InvalidResponse)
 }
 
 fn check_status(response: &Response) -> Result<(), RemoteError> {
-    match response.status().as_u16() {
+    check_status_code(response.status().as_u16())
+}
+
+fn check_status_code(status: u16) -> Result<(), RemoteError> {
+    match status {
         200..=299 => Ok(()),
         401 | 403 => Err(RemoteError::Authentication),
         _ => Err(RemoteError::Upstream),
@@ -378,29 +611,40 @@ fn parse_sse(
         while matches!(line.last(), Some(b'\n' | b'\r')) {
             line.pop();
         }
-        if line == b"data: [DONE]" {
+        if process_sse_line(&line, output, &mut answer)? {
             return Ok(answer);
         }
-        let Some(data) = line.strip_prefix(b"data:") else {
-            continue;
-        };
-        let data = if data.first() == Some(&b' ') {
-            &data[1..]
-        } else {
-            data
-        };
-        let chunk: StreamChunk =
-            serde_json::from_slice(data).map_err(|_| RemoteError::InvalidResponse)?;
-        for choice in chunk.choices {
-            if let Some(content) = choice.delta.content {
-                if content.len() > MAX_ANSWER_BYTES - answer.len() {
-                    return Err(RemoteError::ResponseLimit);
-                }
-                output(&content)?;
-                answer.push_str(&content);
+    }
+}
+
+fn process_sse_line(
+    line: &[u8],
+    output: &mut impl FnMut(&str) -> Result<(), RemoteError>,
+    answer: &mut String,
+) -> Result<bool, RemoteError> {
+    if line == b"data: [DONE]" {
+        return Ok(true);
+    }
+    let Some(data) = line.strip_prefix(b"data:") else {
+        return Ok(false);
+    };
+    let data = if data.first() == Some(&b' ') {
+        &data[1..]
+    } else {
+        data
+    };
+    let chunk: StreamChunk =
+        serde_json::from_slice(data).map_err(|_| RemoteError::InvalidResponse)?;
+    for choice in chunk.choices {
+        if let Some(content) = choice.delta.content {
+            if content.len() > MAX_ANSWER_BYTES - answer.len() {
+                return Err(RemoteError::ResponseLimit);
             }
+            output(&content)?;
+            answer.push_str(&content);
         }
     }
+    Ok(false)
 }
 
 #[derive(Deserialize)]

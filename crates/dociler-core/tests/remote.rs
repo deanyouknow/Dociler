@@ -2,7 +2,11 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
+use dociler_core::chat::{
+    CancellationToken, ChatError, Generation, GenerationEvent, GenerationPoll, RemoteChatBackend,
+};
 use dociler_core::config::{ConfigSource, ConfigStore};
 use dociler_core::credentials::Secret;
 use dociler_core::paths::AppPaths;
@@ -107,11 +111,14 @@ fn verifies_then_streams_unicode_with_bearer_auth() {
         json(r#"{"data":[{"id":"upstream-model"}]}"#),
         json(r#"{"choices":[{"message":{"content":"OK"}}]}"#),
         sse(chunks.as_bytes().to_vec()),
+        sse(chunks.as_bytes().to_vec()),
     ]);
     let profile = RemoteProfile::new("test", &url, "upstream-model", true).unwrap();
     let secret = Secret::new("private-test-value".into());
     let client = RemoteClient::connect(profile, Some(&secret)).unwrap();
-    client.verify().unwrap();
+    client
+        .verify_cancellable(&CancellationToken::new())
+        .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::new(Workspace::open(dir.path()).unwrap());
     session.push(Role::User, "Jelaskan 日本語".into()).unwrap();
@@ -124,10 +131,19 @@ fn verifies_then_streams_unicode_with_bearer_auth() {
         .unwrap();
     assert_eq!(streamed, "Halo dunia");
     assert_eq!(answer, streamed);
+    let mut cancellable_streamed = String::new();
+    let answer = client
+        .stream_chat_cancellable(session.messages(), &CancellationToken::new(), |text| {
+            cancellable_streamed.push_str(text);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(cancellable_streamed, "Halo dunia");
+    assert_eq!(answer, cancellable_streamed);
     server.join().unwrap();
 
     let requests = captured.lock().unwrap();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     for request in requests.iter() {
         let text = String::from_utf8_lossy(request);
         assert!(text.contains("authorization: Bearer private-test-value\r\n"));
@@ -136,9 +152,11 @@ fn verifies_then_streams_unicode_with_bearer_auth() {
     assert!(
         String::from_utf8_lossy(&requests[1]).starts_with("POST /v1/chat/completions HTTP/1.1")
     );
-    let chat = String::from_utf8_lossy(&requests[2]);
-    assert!(chat.contains("Jelaskan 日本語"));
-    assert!(chat.contains("\"stream\":true"));
+    for request in &requests[2..] {
+        let chat = String::from_utf8_lossy(request);
+        assert!(chat.contains("Jelaskan 日本語"));
+        assert!(chat.contains("\"stream\":true"));
+    }
 }
 
 #[test]
@@ -236,4 +254,58 @@ fn profile_configuration_roundtrips_without_a_secret() {
     );
     assert!(!paths.data_dir.exists());
     assert!(!paths.cache_dir.exists());
+}
+
+#[test]
+fn cancellation_aborts_a_stalled_stream_before_transport_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+    let (release_sender, release_receiver) = std::sync::mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_request(&mut stream);
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+        stream.flush().unwrap();
+        ready_sender.send(()).unwrap();
+        release_receiver
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let session = Session::new(Workspace::open(dir.path()).unwrap());
+    let profile =
+        RemoteProfile::new("stall", &format!("http://{address}/v1"), "model", false).unwrap();
+    let generation = Generation::start(
+        session,
+        "hello".to_owned(),
+        Box::new(RemoteChatBackend::native(profile)),
+    )
+    .ok()
+    .unwrap();
+    ready_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    let started = Instant::now();
+    generation.cancel();
+    let deadline = started + Duration::from_secs(1);
+    loop {
+        match generation.poll() {
+            (
+                GenerationPoll::Event,
+                Some(GenerationEvent::Failed(_, ChatError::Remote(RemoteError::Cancelled))),
+            ) => break,
+            (GenerationPoll::Pending, None) => {
+                assert!(Instant::now() < deadline, "cancel did not abort transport");
+                thread::yield_now();
+            }
+            _ => panic!("unexpected generation state"),
+        }
+    }
+    assert!(started.elapsed() < Duration::from_secs(1));
+    release_sender.send(()).unwrap();
+    server.join().unwrap();
 }

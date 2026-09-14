@@ -34,16 +34,25 @@ commands. Enter sends, Alt+Enter inserts a newline, PageUp/PageDown scroll, and
 Escape cancels active generation or clears idle input. Ctrl+C cancels while busy
 and exits while idle.
 
-It does not yet provide the first-run wizard, in-TUI profile creation or hidden
-key entry, Markdown rendering, command/file completion, document discovery,
-context metering, or local/backend selection. Planned commands report that they
-are unavailable rather than silently doing nothing. Cancellation is checked as
-stream fragments arrive; a connection stalled before its next event can remain
-pending until the transport timeout. Profile setup and the one-shot interface
-remain available through the commands in
-[Remote providers](remote-providers.md).
+When no profile exists, the current M3 TUI opens a four-step remote setup for
+profile name, endpoint, model ID, and an optional hidden API key. `/connect add`
+opens the same flow later. It validates and saves only after model listing and a
+minimal generation pass; the key can be persisted only in the OS credential
+store. Escape requests cancellation before configuration commit.
+
+It does not yet provide the local/backend choice, hardware summary, Markdown
+rendering, command/file completion, document discovery, or context metering.
+Planned commands report that they are unavailable rather than silently doing
+nothing. Chat and verification HTTP operations use cancellable async transport;
+blocking OS DNS resolution and credential-service calls remain bounded only by
+their platform behavior. Scriptable profile setup and one-shot chat remain
+available through [Remote providers](remote-providers.md).
 
 ## First-run wizard
+
+The remote half of this wizard is implemented in M3. Until M4 implements local
+hardware admission and assets, a profile-free launch explains that local models
+are pending and proceeds directly to remote setup; Escape cancels without saving.
 
 ### Backend choice
 
@@ -94,7 +103,7 @@ the selected set and estimated processing work.
 | --- | --- |
 | `/help` | Show task examples, keys, commands, and privacy explanations. |
 | `/model` | Inspect, download, switch, or unload local profiles. |
-| `/connect` | Choose/list saved profiles now; add, verify, edit, and remove in the target experience. |
+| `/connect` | Choose/list saved profiles or add/verify one now; edit and remove remain target behavior. |
 | `/files` | Browse supported workspace documents and extraction status. |
 | `/status` | Show backend health, memory/context, permissions, and server state. |
 | `/clear` | Clear the in-memory transcript and extracted context after confirmation. |
@@ -105,9 +114,9 @@ the selected set and estimated processing work.
 | `/update` | Check signed metadata and install only after confirmation. |
 | `/exit` | Exit, asking what to do with a running LAN service. |
 
-Only `/help`, `/status`, saved-profile `/connect`, confirmed `/clear`, and
-`/exit` are active in the current M3 terminal surface. The remaining rows are
-the approved target contract.
+Only `/help`, `/status`, `/connect [NAME|add]`, confirmed `/clear`, and `/exit`
+are active in the current M3 terminal surface. The remaining rows are the
+approved target contract.
 
 ## Write experience
 
