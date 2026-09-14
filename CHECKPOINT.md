@@ -1,20 +1,28 @@
 # Project Checkpoint
 
-Last updated: 2026-09-11T16:54:06Z
+Last updated: 2026-09-14T00:46:47Z
 
 ## Current status
 
-**Status:** M3 remote-provider integration in progress; earlier hosted CI pending.
+**Status:** M3 initial interactive terminal locally implemented and verified;
+onboarding and cancellation hardening pending.
 
-**Active milestone:** M3 — Remote endpoint and text-chat integration.
+**Active milestone:** M3 — Terminal onboarding and remote text chat (remote and
+initial terminal foundations complete; onboarding/hardening pending).
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
 `dociler` executable with help, version, workspace/platform diagnostics, config
 inspection, and explicit default-settings initialization. It includes canonical
 workspace policy lookup, bounded memory-only session types, and a credential
-interface. It has no TUI, chat, document parsing, model/runtime integration,
-native credential adapter, settings/grant update UI, or API yet. The five-platform
-CI workflow is defined but has not been run on GitHub from this environment.
+interface. It now validates and stores remote profiles, uses native credential
+services for optional keys, verifies OpenAI-compatible model listing and minimal
+generation, and streams one text response from stdin with memory-only history.
+It now also opens an initial interactive terminal UI on a real TTY, maintains a
+bounded multi-turn session in memory, renders streamed output without blocking
+ordinary input, exposes core slash commands, and requests cancellation. It has
+no first-run wizard/in-TUI profile creation, document parsing, local model/runtime
+integration, settings/grant update UI, or Dociler API yet. The five-platform CI
+workflow is defined; its hosted result could not be retrieved from this environment.
 
 ## Completed
 
@@ -43,24 +51,48 @@ CI workflow is defined but has not been run on GitHub from this environment.
   session limits/clearing, and unavailable credential-store behavior.
 - Rebuilt and smoke-tested the Linux release executable; documented the schema,
   commands, limitations, pinned dependencies, and ADR-012.
+- Added strict remote profiles and `connect verify`, `connect add`, `connect list`,
+  and `run NAME` commands with a stdin-only, streamed text path.
+- Integrated Reqwest/rustls with proxy inheritance and redirects disabled,
+  per-client DNS pinning, HTTPS/public and private-address HTTP policy, bounded
+  OpenAI JSON/SSE parsing, exact model discovery, and minimal-generation checks.
+- Integrated macOS Keychain, Windows Credential Manager, and Linux Secret Service
+  through a keyring adapter with no plaintext fallback; the Linux transport is
+  pure Rust and does not add a system `libdbus` build prerequisite.
+- Added eight M3 tests (28 total) covering endpoint normalization/policy,
+  redirect and model rejection, limits, bearer auth, Unicode SSE, profile
+  persistence, and executable add/list/run behavior with loopback mock servers.
+- Documented the first remote workflow, protocol/transport limits, dependency
+  boundary, and ADR-013.
+- Added a native Ratatui/Crossterm alternate-screen terminal surface for bare
+  interactive launch and `chat [PROFILE]`, while non-terminal bare launch remains
+  plain help and the existing one-shot commands remain stable.
+- Added memory-only multi-turn remote chat, streaming partial output, background
+  generation, cooperative Escape/Ctrl+C cancellation, bounded Unicode input and
+  paste, terminal-state restoration, scrolling, and continuously visible
+  workspace/profile/read-only/memory-only/API-off state.
+- Added working `/help`, `/status`, saved-profile `/connect`, confirmed `/clear`,
+  and `/exit`; unimplemented planned commands fail visibly. Added five terminal
+  state/render tests, bringing the current Linux suite to 33 tests.
+- Documented the implemented terminal boundary, operational commands,
+  dependency pins, remaining UX gaps, cancellation limitation, and ADR-014.
 
 ## Work in progress
 
-Implementing remote profile validation, endpoint/DNS/redirect policy, native
-credential storage, OpenAI-compatible verification and text streaming, and
-mock-server tests. Starting tree is clean. M1/M2 hosted CI/native execution
-remains unverified.
+None for this bounded progress unit. M3 still has required onboarding and
+hardening work. M1–M3 hosted/native execution remains unverified outside this
+Linux x86-64 environment.
 
 ## Next recommended task
 
-Run the CI workflow when these changes reach GitHub. Begin M3 with remote profile
-and endpoint validation, native credential-store integration, and mock-server
-tests; then connect onboarding and streaming remote text chat to the session
-container. Implement HTTPS/private-address rules and redirect policy before
-sending user content. Keep remote secrets out of settings and make missing OS
-keychain availability explicit. Document transmission/consent and local models
-remain later work; no model downloads are needed for this next task.
-Implementation is already authorized; no additional product decision is needed.
+Continue M3 with a provider-independent generation controller that supports a
+deterministic fake backend and transport-level abort, then add first-run/in-TUI
+remote onboarding with hidden key entry and safe profile creation. Add real
+pseudo-terminal interaction tests for input/render/resize/cancellation and test
+target-platform terminal cleanup. Preserve the non-interactive commands as
+automation interfaces. Run/review hosted CI with valid GitHub access. Do not add
+documents or local model downloads until this text-only terminal path is stable.
+Implementation remains authorized.
 
 ## Blockers
 
@@ -94,8 +126,85 @@ rustup setup described in `docs/development.md` on other machines.
   are locked. Remote profiles/schema migration are not introduced prematurely.
 - Session cap: 1 MiB of text / 512 messages, reject overflow without evicting old
   messages. This is not the future inference tokenizer/context budget.
+- ADR-013: remote URLs are normalized to `/v1`, DNS-pinned per client, proxy-free,
+  redirect-free, HTTPS for public addresses, and HTTP only for all-private or
+  loopback resolutions; credentials use native stores only.
+- Remote profile names are add-only in this integration. Settings persist only
+  name/base URL/upstream model/a credential-presence marker, never the secret.
+- One-shot remote prompts are UTF-8 stdin only (64 KiB maximum); streamed answer
+  text is capped at 1 MiB and remains memory-only unless the caller redirects it.
+- ADR-014: the M3 terminal uses pinned Ratatui 0.29/Crossterm 0.28 on the main
+  event/render thread and an in-process worker/channel for blocking generation.
+  Bare non-terminal use remains plain help; prompt, transcript, and partial
+  output remain memory-only with best-effort zeroization.
+- Current cancellation is cooperative at stream-fragment delivery. A fully
+  stalled blocking request relies on the 120-second transport timeout until an
+  abort-capable controller replaces this interim boundary.
 
 ## Verification
+
+### M3 initial interactive terminal — 2026-09-14
+
+The same isolated Rust 1.85.1 environment was used. Loopback provider tests bind
+only ephemeral `127.0.0.1` ports and make no public-provider requests.
+
+- **passed:** `cargo fmt --all -- --check`.
+- **passed:** `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`.
+- **passed:** `cargo test --workspace --all-targets --locked --offline`: 33 tests
+  (5 terminal unit, 11 CLI, 2 core remote unit, 11 foundation, 4 mock remote).
+- **passed:** `cargo test --workspace --all-targets --release --locked --offline`:
+  the same 33 tests against optimized code.
+- **passed:** `cargo test --workspace --doc --locked --offline`: no doctests yet.
+- **passed:** `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked --offline`.
+- **passed:** `cargo build --workspace --release --locked --offline`; release
+  help, doctor, profile-list, and redirected bare-launch smoke runs.
+- **passed:** delayed-input pseudo-terminal smoke launch and `/exit` using
+  `script`; it exited 0 after exercising alternate-screen setup/cleanup.
+- **passed:** `python3 scripts/check_docs.py`: 16 Markdown files, 27 relative
+  links, title/heading/fence checks, and README coverage; `git diff --check`.
+- **failed then resolved:** the first off-screen render assertion exposed a
+  clipped header; increasing its layout height made state visible and the full
+  suite passed.
+- **failed then resolved:** the first pseudo-terminal smoke injected `/exit`
+  before raw event setup and timed out; a one-second delayed injection exercised
+  the intended event path and exited successfully.
+- **not run:** live provider chat; live credential-store interaction; a real
+  person/manual terminal review; provider-independent fake-backend transcript
+  flow; stalled-transport abort; terminal resize; macOS/Windows/Linux ARM64 and
+  hosted CI.
+- **not run:** onboarding, documents, local model/runtime, LAN API, memory/model
+  qualification, installers, audit, supply-chain, and later release gates. No
+  models or inference runtimes were downloaded.
+
+### M3 remote foundation — 2026-09-11 to 2026-09-14
+
+The final checks used the isolated Rust 1.85.1 environment described below.
+Loopback integration tests required permission to bind ephemeral `127.0.0.1`
+ports; they made no public-provider requests.
+
+- **passed:** `cargo fmt --all -- --check`.
+- **passed:** `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`.
+- **passed:** `cargo test --workspace --all-targets --locked --offline`: 28 tests
+  (11 CLI, 2 core unit, 11 foundation, 4 mock remote integration).
+- **passed:** already-built optimized test binaries for the same 28 tests after
+  the earlier release build completed; release `doctor` and `connect list` smoke
+  runs also passed.
+- **passed:** `cargo test --workspace --doc --locked --offline`: no doctests yet.
+- **passed:** `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked --offline`.
+- **passed:** `python3 scripts/check_docs.py`: 16 Markdown files, 27 relative
+  links, title/heading/fence checks, and README coverage.
+- **passed:** `git diff --check`; M3 implementation is present in commit
+  `68549eb4e82e9e3070e92c72259a3231bb024ee6` before this checkpoint update.
+- **failed then resolved:** the first Linux keyring feature attempted to compile
+  system `libdbus`; it was replaced by the pure-Rust async Secret Service feature,
+  after which build, lint, and tests passed without that system package.
+- **not run:** live third-party provider calls; actual macOS/Windows/Linux Secret
+  Service credential writes; interactive TUI behavior; hosted macOS, Windows,
+  and Linux ARM64 CI. GitHub Actions status was unavailable because the configured
+  token is invalid and the unauthenticated repository API returned 404.
+- **not run:** document consent/ingestion, local model/runtime, memory/model
+  quality, installer, audit, supply-chain, and later release gates. No models or
+  inference runtimes were downloaded.
 
 ### M2 — 2026-09-11
 
@@ -179,3 +288,7 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-11T16:45:07Z | Codex `/root` | Begin authorized M2 continuation | Add settings/path/workspace/session services, credential interface, CLI config inspection/init, tests and handoff; clean starting tree | Cargo manifests/lock, crates/, README, docs/, CHECKPOINT.md | not run: M2 checks pending | IN PROGRESS | Implement and verify M2 without model downloads or document persistence |
 | 2026-09-11T16:54:06Z | Codex `/root` | M2 local implementation and verification | Added strict private config/init, OS paths, canonical grant policy, memory-only sessions, credential boundary, CLI commands, 14 new tests, schema docs and ADR-012; resolves prior in-progress entry | Cargo.toml/lock, core manifest/modules/tests, CLI/tests, README, docs/configuration.md, architecture/development/testing/decisions docs, CHECKPOINT.md | passed: fmt, Clippy, 20 debug and 20 release test executions, Rust docs, release build/smoke, Markdown and diff; failed: initial sandbox dependency DNS, resolved by authorized retry; not run: hosted/platform/keychain/audit/later release gates | LOCAL WORK COMPLETE; HOSTED VALIDATION PENDING | Run hosted CI; begin M3 remote profile validation and credential adapters before onboarding/streaming chat |
 | 2026-09-11T16:58:57Z | Codex `/root` | Begin authorized M3 continuation | Add remote profiles, secure endpoint resolution, OS keychain adapter, upstream verification, one-shot streaming chat, mock-server tests and handoff; clean starting tree | Cargo manifests/lock, crates/, README, docs/, CHECKPOINT.md | not run: M3 checks pending | IN PROGRESS | Implement and verify remote text integration without documents or local models |
+| 2026-09-14T00:22:07Z | Codex `/root` | Complete M3 remote foundation and resume interrupted verification | Confirmed committed remote profile/keychain/HTTP/SSE integration, reran current-tree debug and optimized tests, docs/lints, release smoke, and recorded limitations; resolves prior in-progress entry | Remote/config/credential/session core, CLI commands/tests, Cargo manifests/lock, README, remote/config/architecture/CLI/security/development/testing/decision docs, CHECKPOINT.md | passed: fmt, Clippy, 28 debug tests, 28 optimized test binaries, Rust docs, release smoke, 16-page Markdown check, diff; failed then resolved: system-libdbus keyring feature; not run: hosted platforms/live providers/live keychains/TUI/later gates | REMOTE FOUNDATION COMPLETE; M3 INTERACTIVE UX PENDING | Build testable multi-turn controller and interactive terminal onboarding; review hosted CI with valid access |
+| 2026-09-14T00:27:39Z | Codex `/root` | Continue authorized M3 interactive integration | Add chat controller, terminal surface, core slash commands, visible state, deterministic fake-backend tests, docs and handoff; existing checkpoint-only change is prior agent work | Cargo manifests/lock, core chat/session services, CLI terminal modules/tests, README, docs/, CHECKPOINT.md | not run: interactive M3 checks pending | IN PROGRESS | Implement terminal chat without documents, local models, LAN serving, or persistent transcripts |
+| 2026-09-14T00:44:17Z | Codex `/root` | Complete initial M3 interactive terminal integration | Added real-TTY launch/chat routing, memory-only multi-turn state, background streaming, cooperative cancellation, core commands, terminal restoration/rendering, five TUI tests, dependency pins, docs and ADR-014; resolves prior in-progress entry, except fake-backend/controller extraction is handed forward explicitly | Cargo manifests/lock, `dociler` main/TUI/tests, core remote errors, README, architecture/CLI/development/remote/testing/decision docs, CHECKPOINT.md | passed: fmt, Clippy, 33 debug and release tests, Rust docs, release build/non-TTY smoke, delayed-input PTY exit, Markdown and diff checks; failed then resolved: clipped test header and early PTY input; not run: live/manual/platform/provider/fake-backend/stalled-abort/later gates | INITIAL TERMINAL FOUNDATION COMPLETE; M3 REMAINS ACTIVE | Extract abort-capable provider-independent controller, add deterministic fake backend and in-TUI onboarding/hidden credentials, then broaden PTY/platform checks |
+| 2026-09-14T00:46:47Z | Codex `/root` | Harden cancellation handoff after final review | Added cancellation checks after credential lookup/client creation and before committing a completed answer, preventing a late cancel from entering model context; records follow-up to the 00:44 entry | `crates/dociler/src/tui.rs`, CHECKPOINT.md | passed: fmt, Clippy, 33 debug tests, 33 optimized tests, release rebuild/doctor/non-TTY help, final delayed-input PTY exit, Markdown and diff checks | COMPLETE | Transport-level abort and deterministic fake-backend coverage remain the next M3 hardening task |

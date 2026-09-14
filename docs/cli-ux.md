@@ -12,9 +12,10 @@
 ## Launch behavior
 
 `dociler` with an interactive terminal opens the TUI in the current working
-directory. A non-interactive invocation prints command help rather than emitting
-terminal control sequences. A future `dociler run` subcommand handles scripted
-one-shot use.
+directory. `dociler chat [PROFILE]` does the same and may select a saved remote
+profile. A non-interactive bare invocation prints command help rather than
+emitting terminal control sequences. `dociler run PROFILE` handles scripted
+one-shot use by reading one prompt from standard input.
 
 The landing header shows:
 
@@ -25,12 +26,22 @@ The landing header shows:
 - active or last-used backend and model profile;
 - read-only or write-enabled workspace status.
 
-During the M3 transition, bare launch still prints non-interactive help. Working
-remote commands are `connect verify`, `connect add`, `connect list`, and
-`run NAME`, documented in [Remote providers](remote-providers.md). `run` reads
-one prompt from stdin through EOF and streams one answer. This is not considered
-completion of the landing screen, onboarding wizard, transcript, slash commands,
-keyboard cancellation, or multi-turn experience specified below.
+During the M3 transition, the working TUI supplies a scrollable plain-text
+transcript, bounded multiline composer, memory-only multi-turn history, visible
+workspace/profile/privacy state, streaming output, cooperative cancellation,
+and the core `/help`, `/status`, `/connect [NAME]`, `/clear`, and `/exit`
+commands. Enter sends, Alt+Enter inserts a newline, PageUp/PageDown scroll, and
+Escape cancels active generation or clears idle input. Ctrl+C cancels while busy
+and exits while idle.
+
+It does not yet provide the first-run wizard, in-TUI profile creation or hidden
+key entry, Markdown rendering, command/file completion, document discovery,
+context metering, or local/backend selection. Planned commands report that they
+are unavailable rather than silently doing nothing. Cancellation is checked as
+stream fragments arrive; a connection stalled before its next event can remain
+pending until the transport timeout. Profile setup and the one-shot interface
+remain available through the commands in
+[Remote providers](remote-providers.md).
 
 ## First-run wizard
 
@@ -61,7 +72,7 @@ Collect base URL, optional key, and selected upstream model. Normalize a missing
 `/v1` safely. Show separate results for model listing and minimal generation.
 Save the non-secret profile; save the key only in the OS credential store.
 
-## Main chat layout
+## Target main chat layout
 
 - Scrollable Markdown transcript with distinct user, Dociler, error, and tool
   status treatments.
@@ -83,7 +94,7 @@ the selected set and estimated processing work.
 | --- | --- |
 | `/help` | Show task examples, keys, commands, and privacy explanations. |
 | `/model` | Inspect, download, switch, or unload local profiles. |
-| `/connect` | Add, verify, choose, or remove a remote profile. |
+| `/connect` | Choose/list saved profiles now; add, verify, edit, and remove in the target experience. |
 | `/files` | Browse supported workspace documents and extraction status. |
 | `/status` | Show backend health, memory/context, permissions, and server state. |
 | `/clear` | Clear the in-memory transcript and extracted context after confirmation. |
@@ -93,6 +104,10 @@ the selected set and estimated processing work.
 | `/turn-off-remote` | Stop and unregister the LAN API service. |
 | `/update` | Check signed metadata and install only after confirmation. |
 | `/exit` | Exit, asking what to do with a running LAN service. |
+
+Only `/help`, `/status`, saved-profile `/connect`, confirmed `/clear`, and
+`/exit` are active in the current M3 terminal surface. The remaining rows are
+the approved target contract.
 
 ## Write experience
 

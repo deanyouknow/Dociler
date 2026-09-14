@@ -98,6 +98,7 @@ pub enum RemoteError {
     InvalidResponse,
     ModelUnavailable,
     ResponseLimit,
+    Cancelled,
     Output,
 }
 
@@ -113,6 +114,7 @@ impl fmt::Display for RemoteError {
             Self::InvalidResponse => "remote endpoint returned an invalid response",
             Self::ModelUnavailable => "configured upstream model is unavailable",
             Self::ResponseLimit => "remote response exceeded the safety limit",
+            Self::Cancelled => "remote response was cancelled",
             Self::Output => "response output failed",
         };
         f.write_str(message)

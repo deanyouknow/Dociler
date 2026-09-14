@@ -137,7 +137,14 @@ temporary paths and child-only config overrides; no developer settings are
 modified. M3 adds strict URL/plaintext policy tests; mock OpenAI models,
 generation, redirect, malformed/incomplete SSE, response-limit, bearer-auth,
 Unicode streaming, profile round-trip, and executable add/list/run coverage.
-Loopback tests bind only an ephemeral `127.0.0.1` port. The CI definition runs native builds/tests across five OS/architecture
+Terminal unit tests exercise deterministic slash-command transitions, confirmed
+clearing, profile switching, unavailable-command behavior, bounded input,
+Escape cancellation state, and off-screen rendering through Ratatui's test
+backend. Non-terminal executable tests assert that startup emits no control
+sequences and creates no workspace state. Loopback tests bind only an ephemeral
+`127.0.0.1` port. The CI definition runs native builds/tests across five OS/architecture
 combinations. See `CHECKPOINT.md` for actual local and hosted verification results;
 the existence of a workflow is not evidence that it has run. Later product and
-release gates above remain outstanding.
+release gates above remain outstanding. A real pseudo-terminal flow, live
+provider cancellation/stalls, and target-platform terminal behavior are not yet
+covered.

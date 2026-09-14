@@ -7,8 +7,9 @@ LLM or a user-configured OpenAI-compatible API.
 > **Project status:** Implementation has begun. The Rust CLI foundation provides
 > help, version, workspace diagnostics, and validated settings with explicit
 > initialization. Remote OpenAI-compatible profile verification and streamed
-> one-shot text chat are available. The TUI, local inference, and document
-> analysis are not implemented yet.
+> one-shot text chat are available. An initial memory-only, multi-turn terminal
+> interface is also available for saved remote profiles. First-run onboarding,
+> local inference, and document analysis are not implemented yet.
 
 The first release is scoped to word-processing documents: Markdown (`.md`),
 PDF (`.pdf`), modern and legacy Word (`.docx`, `.doc`), Rich Text Format
@@ -47,10 +48,13 @@ cargo run --locked -- doctor
 cargo run --locked -- config paths
 cargo run --locked -- config show
 cargo run --locked -- connect list
+cargo run --locked -- chat
 ```
 
 See [Development](docs/development.md) for toolchain setup, builds, and checks.
-See [Remote providers](docs/remote-providers.md) for the first working chat path.
+See [Remote providers](docs/remote-providers.md) for profile setup and both chat
+paths. In a terminal, bare `dociler` and `dociler chat [PROFILE]` open the same
+interactive screen; redirected bare invocation safely prints help.
 
 ## Documentation
 

@@ -118,7 +118,7 @@ fn non_interactive_launch_prints_help_without_creating_state() {
     assert!(output.stderr.is_empty());
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("Usage: dociler"));
-    assert!(text.contains("Remote text chat is available"));
+    assert!(text.contains("remote text chat are available"));
     assert!(!text.contains('\u{1b}'));
     assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
 }
@@ -303,6 +303,10 @@ fn unsafe_remote_and_missing_profile_fail_without_writes() {
     );
     assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
     let output = workspace.run_with_input(&["run", "missing"], b"prompt");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+    let output = workspace.run(&["chat", "missing"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);

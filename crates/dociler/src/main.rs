@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
 use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings};
@@ -10,11 +10,14 @@ use dociler_core::remote::{RemoteClient, RemoteError, RemoteProfile};
 use dociler_core::session::{Role, Session};
 use dociler_core::workspace::{Workspace, WritePolicy};
 
+mod tui;
+
 const HELP: &str = "Dociler — local-first document assistant (development build)
 
 Usage: dociler [COMMAND]
 
 Commands:
+  chat [NAME]   Open interactive terminal chat; optionally choose a profile
   doctor        Show basic workspace and platform diagnostics
   config paths  Show OS config/model/runtime/cache locations (no writes)
   config show   Validate settings and show current-workspace policy (no writes)
@@ -31,11 +34,12 @@ Options:
   -h, --help    Show this help
   -V, --version Show the build version
 
-Remote text chat is available through saved profiles. The TUI, document reading,
-local model loading, and Dociler API server are not available yet.
+Interactive and one-shot remote text chat are available through saved profiles.
+Document reading, local model loading, and the Dociler API server are not available yet.
 ";
 
 enum Command {
+    Launch,
     Help,
     Version,
     Doctor,
@@ -55,11 +59,14 @@ enum Command {
     Run {
         name: String,
     },
+    Chat {
+        name: Option<String>,
+    },
 }
 
 fn parse(args: &[OsString]) -> Option<Command> {
     match args {
-        [] => Some(Command::Help),
+        [] => Some(Command::Launch),
         [arg] if arg == "help" || arg == "--help" || arg == "-h" => Some(Command::Help),
         [arg] if arg == "--version" || arg == "-V" => Some(Command::Version),
         [arg] if arg == "doctor" => Some(Command::Doctor),
@@ -89,6 +96,10 @@ fn parse(args: &[OsString]) -> Option<Command> {
         [command, name] if command == "run" => Some(Command::Run {
             name: name.to_str()?.to_owned(),
         }),
+        [command] if command == "chat" => Some(Command::Chat { name: None }),
+        [command, name] if command == "chat" => Some(Command::Chat {
+            name: Some(name.to_str()?.to_owned()),
+        }),
         _ => None,
     }
 }
@@ -100,6 +111,7 @@ enum CommandError {
     Credential(CredentialError),
     Input,
     Remote(RemoteError),
+    Terminal,
 }
 
 impl From<io::Error> for CommandError {
@@ -190,8 +202,21 @@ fn remote_profile(name: &str) -> Result<RemoteProfile, CommandError> {
         .ok_or(CommandError::Input)
 }
 
+fn interactive(name: Option<&str>) -> Result<(), CommandError> {
+    let workspace = workspace()?;
+    let loaded = settings()?;
+    if name.is_some_and(|name| loaded.settings.remote_profile(name).is_none()) {
+        return Err(CommandError::Input);
+    }
+    tui::run(workspace, loaded.settings.remote_profiles().to_vec(), name)
+        .map_err(|_| CommandError::Terminal)
+}
+
 fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError> {
     match command {
+        Command::Launch | Command::Chat { .. } => {
+            unreachable!("interactive commands are handled before execute")
+        }
         Command::Help => write!(output, "{HELP}")?,
         Command::Version => writeln!(output, "dociler {}", env!("CARGO_PKG_VERSION"))?,
         Command::ConfigPaths => {
@@ -342,7 +367,7 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             print_settings(output, &loaded, &workspace)?;
             writeln!(
                 output,
-                "Remote text chat: available via 'dociler run PROFILE'"
+                "Remote text chat: interactive 'dociler chat [PROFILE]' or one-shot 'dociler run PROFILE'"
             )?;
             writeln!(
                 output,
@@ -366,7 +391,16 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    match execute(command, &mut io::stdout().lock()) {
+    let is_interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+    let result = match command {
+        Command::Launch if is_interactive => interactive(None),
+        Command::Launch => execute(Command::Help, &mut io::stdout().lock()),
+        Command::Chat { name } if is_interactive => interactive(name.as_deref()),
+        Command::Chat { .. } => Err(CommandError::Input),
+        command => execute(command, &mut io::stdout().lock()),
+    };
+
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(CommandError::Output(error)) if error.kind() == io::ErrorKind::BrokenPipe => {
             ExitCode::SUCCESS
@@ -421,8 +455,12 @@ fn main() -> ExitCode {
                     RemoteError::ResponseLimit => {
                         "remote response exceeded Dociler's safety limit."
                     }
+                    RemoteError::Cancelled => "remote response was cancelled.",
                     RemoteError::Output => "output failed while streaming the remote response.",
                 },
+                CommandError::Terminal => {
+                    "interactive terminal setup or event handling failed; terminal state was restored."
+                }
                 CommandError::Output(_) => "output failed; check the output destination.",
             };
             let _ = writeln!(io::stderr().lock(), "dociler: {message}");

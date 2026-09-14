@@ -5,16 +5,17 @@
 M1 provides a Cargo workspace, a basic executable, shared diagnostics, CLI
 integration tests, and GitHub Actions. M2 adds OS paths, validated JSON settings,
 explicit no-clobber initialization, canonical workspace policy lookup, bounded
-memory-only sessions, and a credential-store interface. Native keychain adapters,
-chat, TUI onboarding, inference, document processing, and serving remain future
-work. M3 adds verified remote profiles, OS keychain integration, and streamed
-one-shot text chat. The immersive TUI and document/local-model integrations
-remain future work. See [Configuration](configuration.md) and
+memory-only sessions, and a credential-store interface. M3 adds verified remote
+profiles, OS keychain integration, streamed one-shot chat, and an initial
+interactive multi-turn terminal surface. First-run TUI onboarding, inference,
+document processing, and serving remain future work. See
+[Configuration](configuration.md) and
 [Remote providers](remote-providers.md) for commands and boundaries.
 
 Direct dependencies are pinned: directories 6.0.0, Serde 1.0.219, serde_json
 1.0.140, tempfile 3.19.1, zeroize 1.8.1, URL 2.5.4, Reqwest 0.12.23,
-and keyring 3.6.3. The lockfile pins transitives. These
+keyring 3.6.3, Ratatui 0.29.0, Crossterm 0.28.1, and Unicode Width 0.2.0.
+The lockfile pins transitives. These
 are deliberate Rust-1.85-compatible baseline pins, not claims to be the latest
 releases. Dependency vulnerability/license audits remain release work.
 
@@ -43,13 +44,16 @@ cargo run --locked -- doctor
 cargo run --locked -- config paths
 cargo run --locked -- config show
 cargo run --locked -- connect list
+cargo run --locked -- chat
 cargo build --release --locked
 ```
 
 The resulting executable is `target/release/dociler` on macOS/Linux and
 `target/release/dociler.exe` on Windows. It can be run from another directory.
-Bare invocation currently prints help even in a terminal; the planned TUI will
-replace this during a later milestone.
+Bare invocation opens the interactive surface only when standard input and
+output are terminals. It prints help in redirected/non-interactive use. Use
+`chat [PROFILE]` to select a saved profile explicitly and `run PROFILE` for one
+prompt supplied on standard input.
 
 `doctor` reports a canonical workspace path, OS, architecture, and current
 development capabilities. It reads directory metadata and validates saved
@@ -64,8 +68,8 @@ it writes the key only to the OS credential service.
 
 ## Workspace boundaries
 
-- `crates/dociler`: process entrypoint, CLI parsing/output, executable integration
-  tests; future terminal and transport adapters belong here initially.
+- `crates/dociler`: process entrypoint, CLI parsing/output, Ratatui/Crossterm
+  terminal adapter, and executable/TUI integration tests.
 - `crates/dociler-core`: shared services independent of TUI/HTTP. Diagnostics is
   accompanied by config, paths, workspace, session, and credential modules.
   Add substantive modules as features arrive rather than

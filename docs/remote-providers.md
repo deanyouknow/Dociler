@@ -2,10 +2,9 @@
 
 ## Current capability
 
-M3's first integration can validate, save, list, and call an
-OpenAI-compatible remote profile. It supports text messages only and streams an
-OpenAI-style SSE response to stdout. This is a scriptable foundation for the
-future onboarding TUI, not the final immersive chat interface.
+M3 can validate, save, list, and call an OpenAI-compatible remote profile. It
+supports text messages only and streams OpenAI-style SSE responses through both
+a scriptable one-shot command and an initial interactive, multi-turn TUI.
 
 It does not read or upload workspace files, inject document skills, persist a
 transcript, follow redirects, start Dociler's LAN API, or use a local model.
@@ -47,10 +46,27 @@ answer only in the process session, streams answer fragments to stdout, then
 exits. Redirect stdout deliberately if the user wants to save an answer; Dociler
 does not create a transcript or document itself.
 
+For interactive chat, use either of these from a real terminal:
+
+```sh
+dociler
+dociler chat office
+```
+
+If a profile name is omitted, Dociler selects the first saved profile. Use
+`/connect` to list profiles or `/connect NAME` to switch; switching resets model
+context. `/status`, `/help`, the two-step `/clear`, and `/exit` are also active.
+History and rendered transcript remain only in process memory. A redirected
+bare invocation prints help, and `chat` refuses to start without terminal input
+and output, so scripts do not receive terminal control sequences.
+
 Profiles are add-only in this integration. Duplicate names fail without
 replacement. Profile removal, key rotation, interactive hidden key entry,
-multi-turn TUI chat, cancellation keys, reconnect UI, and upstream profile
-editing are still pending.
+first-run onboarding, reconnect UI, and upstream profile editing are still
+pending. Escape or Ctrl+C requests cancellation while a response streams, but
+the current blocking transport observes it only when another stream fragment
+arrives; a fully stalled connection relies on the 120-second request timeout.
+Partial output remains visible but is not added to subsequent model context.
 
 ## Endpoint policy
 
@@ -96,8 +112,9 @@ not supported yet.
 
 ## Dependency boundary
 
-Remote HTTP uses pinned Reqwest 0.12.23 with rustls. Credential integration uses
-pinned keyring 3.6.3: native Apple/Windows stores and the pure-Rust async Secret
+Remote HTTP uses pinned Reqwest 0.12.23 with rustls. The terminal uses pinned
+Ratatui 0.29.0 with Crossterm 0.28.1 and Unicode Width 0.2.0. Credential
+integration uses pinned keyring 3.6.3: native Apple/Windows stores and the pure-Rust async Secret
 Service transport on Linux. The pure-Rust Linux choice avoids requiring users to
 install development `libdbus` packages. Versions are selected for Rust 1.85 and
 locked transitively; audits and target-platform runtime tests remain release gates.

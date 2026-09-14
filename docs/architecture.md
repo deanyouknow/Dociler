@@ -164,9 +164,14 @@ contains no key; it derives an opaque credential identifier used with the OS
 store. Each remote client validates the URL, resolves and pins DNS addresses,
 constructs a proxy-free/no-redirect Reqwest client, checks model discovery plus
 a minimal generation, and parses bounded SSE into the memory-only session.
-See [Remote providers](remote-providers.md). The CLI currently supplies only one
-user message per process; orchestration, skills, documents, and TUI state remain
-future layers.
+See [Remote providers](remote-providers.md). The executable now has a thin
+Ratatui/Crossterm terminal adapter whose in-memory state owns the transcript,
+composer, selected profile, and bounded session. Remote generation runs on one
+background thread per turn and sends bounded fragments back over a channel, so
+terminal drawing/input are not blocked by ordinary streaming. Cancellation is
+currently cooperative at fragment delivery; transport-level abort remains M3
+hardening. Provider policy and HTTP parsing remain in `dociler-core`; onboarding,
+skills, documents, and local orchestration are still future layers.
 
 ## Failure containment
 
