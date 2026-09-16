@@ -179,3 +179,24 @@ output stable and free of control sequences.
 transcripts, silently falling back from failed TUI setup, and introducing a
 browser/Electron frontend. Blocking DNS and OS credential calls remain explicit
 platform boundaries rather than reasons to weaken endpoint or secret policy.
+
+## ADR-015: Verify-first profile changes with explicit cross-store cleanup
+
+**Decision:** Re-load validated settings and verify a candidate authentication
+policy before changing it. Profile removal and key clearing publish the
+non-secret configuration first, then delete the native credential. If cleanup
+fails, keep the safe configuration result and report a possible orphaned secret.
+When adding a key to a formerly keyless profile, write it to the native store,
+publish the required marker, and best-effort roll the key back if publication
+fails. Require explicit confirmation for destructive non-interactive commands
+and exact command repetition in the TUI.
+
+**Why:** Configuration files and platform credential managers do not share an
+atomic transaction. This ordering avoids leaving a saved profile that demands a
+missing key, never silently falls back to unauthenticated access, and makes the
+remaining cleanup risk visible. Verification prevents committing a replacement
+that cannot list and minimally invoke the configured model.
+
+**Rejected:** Deleting the key before its profile/marker, silently ignoring
+cleanup failures, storing recovery copies in configuration, replacing profiles
+without verification, and one-keystroke destructive removal.

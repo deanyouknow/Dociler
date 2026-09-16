@@ -8,8 +8,9 @@ explicit no-clobber initialization, canonical workspace policy lookup, bounded
 memory-only sessions, and a credential-store interface. M3 adds verified remote
 profiles, OS keychain integration, streamed one-shot chat, a provider-independent
 generation controller, cancellable HTTP, and an initial interactive multi-turn
-terminal surface with remote onboarding. Local onboarding, inference, document
-processing, and serving remain future work. See
+terminal surface with remote onboarding, confirmed profile removal, and verified
+credential rotation. Local onboarding, inference, document processing, and
+serving remain future work. See
 [Configuration](configuration.md) and
 [Remote providers](remote-providers.md) for commands and boundaries.
 
@@ -67,7 +68,9 @@ available. Help/version exit with 0; invalid arguments with 2; diagnostic,
 configuration, and output errors with 1. Broken output pipes exit quietly.
 `config init` writes defaults explicitly and without overwriting. A successful
 `connect add` also saves a verified non-secret profile; when a key is supplied,
-it writes the key only to the OS credential service.
+it writes the key only to the OS credential service. `connect key`, confirmed
+`connect key-clear`, and confirmed `connect remove` provide scriptable profile
+lifecycle operations; secrets still enter only through `DOCILER_API_KEY`.
 
 ## Workspace boundaries
 
@@ -94,6 +97,7 @@ cargo test --workspace --all-targets --locked
 cargo test --workspace --doc --locked
 cargo doc --workspace --no-deps --locked
 cargo build --workspace --release --locked
+python3 scripts/test_tui_pty.py target/debug/dociler  # POSIX/Linux integration
 python3 scripts/check_docs.py
 git diff --check
 ```
@@ -104,6 +108,10 @@ runs. It builds and executes on Linux x86-64/ARM64, macOS Intel/Apple Silicon, a
 Windows x86-64. Runner labels are selected from the
 [GitHub runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 Hosted runner checks do not certify minimum OS versions or 8/16 GB hardware.
+Linux native jobs also drive the built executable through a real pseudo-terminal
+against an ephemeral loopback mock provider, covering first-run onboarding,
+multi-turn streaming, cancellation disconnect, resize survival, and terminal
+cleanup. The harness sends no public requests and uses an isolated config path.
 
 There is no publishing workflow yet. Dependency vulnerability/license auditing,
 release packages, checksums, signed manifests, SBOMs, provenance, and installer

@@ -26,10 +26,20 @@ dociler connect add office https://models.example.com/v1 upstream-model
 dociler connect list
 ```
 
+Rotate or remove credentials and profiles:
+
+```sh
+DOCILER_API_KEY='replacement' dociler connect key office
+dociler connect key-clear office --confirm
+dociler connect remove office --confirm
+```
+
 For an authenticated endpoint, provide `DOCILER_API_KEY` in the process
 environment while running `connect verify` or `connect add`. The key is never a
-command argument and is never printed. `verify` uses it transiently and saves
-nothing. `add` stores it in macOS Keychain, Windows Credential Manager, or Linux
+command argument and is never printed. `connect key` also requires a non-empty
+`DOCILER_API_KEY`; `connect key-clear` verifies keyless access before removing
+the native key and therefore requires `--confirm`. `verify` uses a key
+transiently and saves nothing. `add` stores it in macOS Keychain, Windows Credential Manager, or Linux
 Secret Service, then writes only a `credential: true` marker to settings. Clear
 the environment variable after use. If the OS credential service is locked or
 unavailable, `add` fails—there is no plaintext-file fallback.
@@ -55,7 +65,10 @@ dociler chat office
 
 If a profile name is omitted, Dociler selects the first saved profile. Use
 `/connect` to list profiles, `/connect NAME` to switch, or `/connect add` for the
-four-step profile wizard; switching resets model context. `/status`, `/help`,
+four-step profile wizard. `/connect remove NAME` requires repeating the exact
+command, and `/connect key NAME` opens a masked field where an empty value means
+verified keyless access. Switching, removing the active profile, or updating its
+credential resets model context. `/status`, `/help`,
 the two-step `/clear`, and `/exit` are also active.
 History and rendered transcript remain only in process memory. A redirected
 bare invocation prints help, and `chat` refuses to start without terminal input
@@ -69,9 +82,14 @@ request timeout. Cancellation after response fragments leaves partial output
 visible but never adds it to subsequent model context. OS DNS lookup and native
 credential-store calls are still blocking platform operations.
 
-Profiles are add-only in this integration. Duplicate names fail without
-replacement. Profile removal, key rotation, reconnect UI, and upstream profile
-editing are still pending.
+Use `/back` to revisit setup fields after validation or verification fails;
+hidden key input is always discarded after an attempt. Duplicate names fail
+without replacement. Removal writes the non-secret configuration first and then
+deletes any native credential, reporting an actionable warning if cleanup fails.
+Credential rotation verifies the candidate policy before mutation and rolls a
+new key back if the configuration marker cannot be saved. Upstream endpoint/model
+editing, automatic reconnect state, and refreshed concurrent-process state are
+still pending.
 
 ## Endpoint policy
 

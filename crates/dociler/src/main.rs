@@ -7,7 +7,10 @@ use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings};
 use dociler_core::credentials::{CredentialError, CredentialStore, OsCredentialStore, Secret};
 use dociler_core::diagnostics::Diagnostics;
 use dociler_core::paths::AppPaths;
-use dociler_core::profiles::{ProfileInstallError, install_remote_profile};
+use dociler_core::profiles::{
+    ProfileInstallError, ProfileMutationError, install_remote_profile, remove_remote_profile,
+    rotate_remote_credential,
+};
 use dociler_core::remote::{RemoteClient, RemoteError, RemoteProfile};
 use dociler_core::session::{Role, Session};
 use dociler_core::workspace::{Workspace, WritePolicy};
@@ -29,6 +32,12 @@ Commands:
                 Verify an endpoint without saving it
   connect add NAME URL MODEL
                 Verify and save a new profile; reads optional DOCILER_API_KEY
+  connect remove NAME --confirm
+                Remove a profile and its OS-stored credential
+  connect key NAME
+                Verify and rotate a key from required DOCILER_API_KEY
+  connect key-clear NAME --confirm
+                Verify keyless access, then remove the OS-stored key
   run NAME       Stream one remote text response; reads the prompt from stdin
   help          Show this help
 
@@ -57,6 +66,15 @@ enum Command {
         name: String,
         url: String,
         model: String,
+    },
+    ConnectRemove {
+        name: String,
+        confirmed: bool,
+    },
+    ConnectKey {
+        name: String,
+        clear: bool,
+        confirmed: bool,
     },
     Run {
         name: String,
@@ -95,6 +113,43 @@ fn parse(args: &[OsString]) -> Option<Command> {
                 model: model.to_str()?.to_owned(),
             })
         }
+        [command, action, name] if command == "connect" && action == "remove" => {
+            Some(Command::ConnectRemove {
+                name: name.to_str()?.to_owned(),
+                confirmed: false,
+            })
+        }
+        [command, action, name, flag]
+            if command == "connect" && action == "remove" && flag == "--confirm" =>
+        {
+            Some(Command::ConnectRemove {
+                name: name.to_str()?.to_owned(),
+                confirmed: true,
+            })
+        }
+        [command, action, name] if command == "connect" && action == "key" => {
+            Some(Command::ConnectKey {
+                name: name.to_str()?.to_owned(),
+                clear: false,
+                confirmed: true,
+            })
+        }
+        [command, action, name, flag]
+            if command == "connect" && action == "key-clear" && flag == "--confirm" =>
+        {
+            Some(Command::ConnectKey {
+                name: name.to_str()?.to_owned(),
+                clear: true,
+                confirmed: true,
+            })
+        }
+        [command, action, name] if command == "connect" && action == "key-clear" => {
+            Some(Command::ConnectKey {
+                name: name.to_str()?.to_owned(),
+                clear: true,
+                confirmed: false,
+            })
+        }
         [command, name] if command == "run" => Some(Command::Run {
             name: name.to_str()?.to_owned(),
         }),
@@ -112,6 +167,7 @@ enum CommandError {
     Config(io::ErrorKind),
     Credential(CredentialError),
     Input,
+    Usage(&'static str),
     Remote(RemoteError),
     Terminal,
 }
@@ -202,6 +258,17 @@ fn remote_profile(name: &str) -> Result<RemoteProfile, CommandError> {
         .remote_profile(name)
         .cloned()
         .ok_or(CommandError::Input)
+}
+
+fn map_profile_mutation(error: ProfileMutationError) -> CommandError {
+    match error {
+        ProfileMutationError::Config(kind) => CommandError::Config(kind),
+        ProfileMutationError::Credential(error)
+        | ProfileMutationError::CredentialRollback(error) => CommandError::Credential(error),
+        ProfileMutationError::Remote(error) => CommandError::Remote(error),
+        ProfileMutationError::Cancelled => CommandError::Remote(RemoteError::Cancelled),
+        ProfileMutationError::NotFound => CommandError::Input,
+    }
 }
 
 fn interactive(name: Option<&str>) -> Result<(), CommandError> {
@@ -311,6 +378,54 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             writeln!(output, "Endpoint: {}", profile.base_url())?;
             writeln!(output, "Model: {}", profile.model())?;
             writeln!(output, "Use: dociler run {}", profile.name())?;
+        }
+        Command::ConnectRemove { name, confirmed } => {
+            if !confirmed {
+                return Err(CommandError::Usage(
+                    "profile removal requires: dociler connect remove NAME --confirm",
+                ));
+            }
+            let outcome = remove_remote_profile(&paths()?, &name, &CancellationToken::new())
+                .map_err(map_profile_mutation)?;
+            writeln!(output, "Removed remote profile '{name}'.")?;
+            if outcome.credential_cleanup_warning().is_some() {
+                writeln!(
+                    output,
+                    "Warning: the profile was removed, but its OS credential could not be deleted."
+                )?;
+            }
+        }
+        Command::ConnectKey {
+            name,
+            clear,
+            confirmed,
+        } => {
+            if !confirmed {
+                return Err(CommandError::Usage(
+                    "clearing a key requires: dociler connect key-clear NAME --confirm",
+                ));
+            }
+            let secret = if clear {
+                None
+            } else {
+                Some(environment_secret()?.ok_or(CommandError::Usage(
+                    "key rotation requires a non-empty DOCILER_API_KEY",
+                ))?)
+            };
+            let outcome =
+                rotate_remote_credential(&paths()?, &name, secret, &CancellationToken::new())
+                    .map_err(map_profile_mutation)?;
+            writeln!(
+                output,
+                "Verified and updated credential policy for '{}'.",
+                outcome.profile().name()
+            )?;
+            if outcome.credential_cleanup_warning().is_some() {
+                writeln!(
+                    output,
+                    "Warning: keyless mode was saved, but the old OS credential could not be deleted."
+                )?;
+            }
         }
         Command::Run { name } => {
             let profile = remote_profile(&name)?;
@@ -429,6 +544,7 @@ fn main() -> ExitCode {
                 CommandError::Input => {
                     "invalid input; use 'dociler --help'. Prompts for 'run' must be non-empty UTF-8 on stdin and at most 64 KiB."
                 }
+                CommandError::Usage(message) => message,
                 CommandError::Remote(error) => match error {
                     RemoteError::InvalidProfile => "invalid remote profile name, URL, or model.",
                     RemoteError::UnsafeEndpoint => {

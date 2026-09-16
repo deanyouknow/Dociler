@@ -71,6 +71,12 @@ impl RemoteProfile {
         self.credential
     }
 
+    pub(crate) fn with_credential(&self, credential: bool) -> Self {
+        let mut profile = self.clone();
+        profile.credential = credential;
+        profile
+    }
+
     pub fn credential_id(&self) -> CredentialId {
         // Profile validation guarantees this derived identifier is valid.
         CredentialId::new(&format!("remote-{}", self.name)).expect("validated profile name")

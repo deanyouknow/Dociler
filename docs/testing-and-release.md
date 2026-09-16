@@ -143,13 +143,20 @@ Escape cancellation state, and off-screen rendering through Ratatui's test
 backend. Non-terminal executable tests assert that startup emits no control
 sequences and creates no workspace state. A provider-independent fake backend
 tests ordered fragments, successful session commit, and deterministic cancelled
-turns. Profile service tests separate configuration from credentials and prove a
-pre-cancelled install writes nothing. The remote integration suite verifies that
+turns. Profile service tests separate configuration from credentials, prove
+pre-cancelled install/removal/rotation writes nothing, exercise native-key marker
+rotation, and cover orphan cleanup reporting. Terminal tests cover setup
+backtracking, masked key rotation, and exact-repeat removal with active-context
+reset. Executable coverage confirms unconfirmed removal and missing rotation
+input do not mutate configuration. The remote integration suite verifies that
 cancellation drops a peer-stalled HTTP stream before the transport timeout.
+`scripts/test_tui_pty.py` additionally drives the real executable on Linux
+through onboarding, two contextual turns, stalled-stream cancellation, a window
+resize, alternate-screen restoration, and clean exit against a loopback mock.
 Loopback tests bind only an ephemeral
 `127.0.0.1` port. The CI definition runs native builds/tests across five OS/architecture
 combinations. See `CHECKPOINT.md` for actual local and hosted verification results;
 the existence of a workflow is not evidence that it has run. Later product and
-release gates above remain outstanding. A complete pseudo-terminal onboarding
-flow, live-provider cancellation, blocking DNS/keychain interruption, and
-target-platform terminal behavior are not yet covered.
+release gates above remain outstanding. Live-provider cancellation, blocking
+DNS/keychain interruption, and non-Linux target-platform terminal behavior are
+not yet covered.

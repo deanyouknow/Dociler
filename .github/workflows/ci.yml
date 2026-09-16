@@ -63,4 +63,6 @@ jobs:
         run: |
           ./target/release/dociler --version
           ./target/release/dociler doctor
-
+      - name: Run Linux pseudo-terminal integration
+        if: runner.os == 'Linux'
+        run: python3 scripts/test_tui_pty.py target/release/dociler

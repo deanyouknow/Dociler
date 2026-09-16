@@ -65,9 +65,11 @@ malformed JSON, duplicate remote names, invalid remote endpoints, and unsupporte
 exists yet. Errors do not echo the rejected key/value or file contents.
 The parser uses [Serde's unknown-field rejection](https://serde.rs/container-attrs.html).
 
-Only initialization and reading are currently available. A future permissions
-UI must save a grant from the canonical workspace identity after confirmation;
-there is no grant/revoke command or settings-update writer yet. A stored grant
+Initialization plus verified remote-profile add, credential-policy update, and
+confirmed removal are currently available. Profile operations re-load and
+validate current settings immediately before an atomic save; they never
+serialize keys. A future permissions UI must save a grant from the canonical
+workspace identity after confirmation; there is no grant/revoke command yet. A stored grant
 matches only the exact canonical workspace, never descendants or a symlink
 alias that later points somewhere else. Its policy is **confirm every write**,
 not unrestricted access. Editing/export services do not exist yet and must
@@ -98,4 +100,8 @@ The credential interface accepts opaque profile IDs and redacted, zeroizing
 secret values. Its native adapter uses the logged-in user's platform credential
 service and returns an explicit error when unavailable, never a plaintext-file
 fallback. Do not place API keys in this JSON file or command-line arguments.
-Destination-bound document consent and the TUI will arrive in later milestones.
+Profile removal saves configuration before deleting a key; keyless conversion
+does the same. If cleanup is denied, Dociler reports the possible orphan without
+recreating the removed/authenticated profile. A replacement key is verified
+before mutation and rolled back when a required configuration update fails.
+Destination-bound document consent will arrive with document ingestion.

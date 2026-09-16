@@ -142,6 +142,28 @@ impl Settings {
         self.remote_profiles.push(profile);
         Ok(())
     }
+
+    pub fn remove_remote_profile(&mut self, name: &str) -> Option<RemoteProfile> {
+        let index = self
+            .remote_profiles
+            .iter()
+            .position(|profile| profile.name() == name)?;
+        Some(self.remote_profiles.remove(index))
+    }
+
+    pub fn set_remote_profile_credential(
+        &mut self,
+        name: &str,
+        credential: bool,
+    ) -> io::Result<RemoteProfile> {
+        let profile = self
+            .remote_profiles
+            .iter_mut()
+            .find(|profile| profile.name() == name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "remote profile not found"))?;
+        *profile = profile.with_credential(credential);
+        Ok(profile.clone())
+    }
 }
 
 fn invalid_config() -> io::Error {

@@ -95,6 +95,11 @@ fn serve_cli_flow() -> (String, thread::JoinHandle<()>) {
                 "text/event-stream",
                 "data: {\"choices\":[{\"delta\":{\"content\":\"CLI works\"}}]}\n\ndata: [DONE]\n\n",
             ),
+            ("application/json", r#"{"data":[{"id":"model-a"}]}"#),
+            (
+                "application/json",
+                r#"{"choices":[{"message":{"content":"OK"}}]}"#,
+            ),
         ];
         for (content_type, body) in replies {
             let (mut stream, _) = listener.accept().unwrap();
@@ -285,10 +290,51 @@ fn remote_profile_add_list_and_stdin_run_work_end_to_end() {
     );
     assert_eq!(String::from_utf8(run.stdout).unwrap(), "CLI works\n");
     assert!(run.stderr.is_empty());
-    server.join().unwrap();
-    let config = fs::read_to_string(workspace.0.join("settings/config.json")).unwrap();
+    let config_path = workspace.0.join("settings/config.json");
+    let config = fs::read_to_string(&config_path).unwrap();
     assert!(config.contains("office"));
     assert!(!config.contains("Tolong jawab"));
+
+    let missing_key = workspace.run(&["connect", "key", "office"]);
+    assert_eq!(missing_key.status.code(), Some(1));
+    assert!(
+        String::from_utf8(missing_key.stderr)
+            .unwrap()
+            .contains("DOCILER_API_KEY")
+    );
+    assert!(fs::read_to_string(&config_path).unwrap().contains("office"));
+    let keyless = workspace.run(&["connect", "key-clear", "office", "--confirm"]);
+    assert!(
+        keyless.status.success(),
+        "{}",
+        String::from_utf8_lossy(&keyless.stderr)
+    );
+    assert!(
+        String::from_utf8(keyless.stdout)
+            .unwrap()
+            .contains("updated credential policy")
+    );
+    server.join().unwrap();
+    let unconfirmed = workspace.run(&["connect", "remove", "office"]);
+    assert_eq!(unconfirmed.status.code(), Some(1));
+    assert!(
+        String::from_utf8(unconfirmed.stderr)
+            .unwrap()
+            .contains("--confirm")
+    );
+    assert!(fs::read_to_string(&config_path).unwrap().contains("office"));
+    let removed = workspace.run(&["connect", "remove", "office", "--confirm"]);
+    assert!(
+        removed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    assert!(
+        String::from_utf8(removed.stdout)
+            .unwrap()
+            .contains("Removed")
+    );
+    assert!(!fs::read_to_string(&config_path).unwrap().contains("office"));
 }
 
 #[test]

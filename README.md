@@ -8,8 +8,9 @@ LLM or a user-configured OpenAI-compatible API.
 > help, version, workspace diagnostics, and validated settings with explicit
 > initialization. Remote OpenAI-compatible profile verification and streamed
 > one-shot text chat are available. An initial memory-only, multi-turn terminal
-> interface and remote-profile onboarding are also available. Local backend
-> onboarding, local inference, and document analysis are not implemented yet.
+> interface, remote-profile onboarding, confirmed profile removal, and verified
+> key rotation are also available. Local backend onboarding, local inference,
+> and document analysis are not implemented yet.
 
 The first release is scoped to word-processing documents: Markdown (`.md`),
 PDF (`.pdf`), modern and legacy Word (`.docx`, `.doc`), Rich Text Format
@@ -48,6 +49,7 @@ cargo run --locked -- doctor
 cargo run --locked -- config paths
 cargo run --locked -- config show
 cargo run --locked -- connect list
+cargo run --locked -- connect remove PROFILE --confirm
 cargo run --locked -- chat
 ```
 

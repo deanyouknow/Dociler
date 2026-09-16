@@ -50,6 +50,17 @@ cannot enter this path yet. Cross-platform DNS/TLS/keychain
 runtime validation and redirect/rebinding adversarial coverage remain release
 gates rather than implied guarantees.
 
+Profile lifecycle operations never place a secret in settings. Key changes are
+verified against the saved endpoint/model before native-store or configuration
+mutation. Adding the first key writes the native secret and then publishes the
+credential marker, with best-effort rollback if publication fails. Clearing a
+key publishes keyless configuration before deleting the old secret. Profile
+removal likewise publishes removal before native-key cleanup. Cleanup failures
+are reported as possible orphaned credentials rather than restoring a profile
+that may no longer be usable. These operations cannot be atomic across an OS
+credential manager and the config filesystem; the chosen order keeps saved
+profiles usable and avoids silently weakening authentication.
+
 ## Filesystem containment
 
 - Canonicalize workspace and candidate paths immediately before access to reduce
