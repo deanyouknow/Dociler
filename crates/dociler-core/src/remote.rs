@@ -71,6 +71,14 @@ impl RemoteProfile {
         self.credential
     }
 
+    pub fn same_origin(&self, other: &Self) -> bool {
+        let left = Url::parse(&self.base_url).expect("validated remote profile URL");
+        let right = Url::parse(&other.base_url).expect("validated remote profile URL");
+        left.scheme() == right.scheme()
+            && left.host_str() == right.host_str()
+            && left.port_or_known_default() == right.port_or_known_default()
+    }
+
     pub(crate) fn with_credential(&self, credential: bool) -> Self {
         let mut profile = self.clone();
         profile.credential = credential;

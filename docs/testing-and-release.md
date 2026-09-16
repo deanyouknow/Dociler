@@ -148,11 +148,16 @@ pre-cancelled install/removal/rotation writes nothing, exercise native-key marke
 rotation, and cover orphan cleanup reporting. Terminal tests cover setup
 backtracking, masked key rotation, and exact-repeat removal with active-context
 reset. Executable coverage confirms unconfirmed removal and missing rotation
-input do not mutate configuration. The remote integration suite verifies that
+input do not mutate configuration. Refresh/edit/check coverage verifies that
+unrelated concurrent changes survive long verification, stale target edits are
+rejected, authenticated origin changes stop before key access without consent,
+and a prompt is not transmitted after the active profile changes on disk. The
+remote integration suite verifies that
 cancellation drops a peer-stalled HTTP stream before the transport timeout.
 `scripts/test_tui_pty.py` additionally drives the real executable on Linux
 through onboarding, two contextual turns, stalled-stream cancellation, a window
-resize, alternate-screen restoration, and clean exit against a loopback mock.
+resize, a saved-profile health check, alternate-screen restoration, and clean
+exit against a loopback mock.
 Loopback tests bind only an ephemeral
 `127.0.0.1` port. The CI definition runs native builds/tests across five OS/architecture
 combinations. See `CHECKPOINT.md` for actual local and hosted verification results;

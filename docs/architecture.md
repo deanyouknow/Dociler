@@ -174,12 +174,23 @@ remote adapter uses a worker-local current-thread async runtime; cancellation
 drops active model-listing, verification-generation, or chat transports even if
 the peer has stopped sending. Blocking OS DNS and credential calls are not yet
 interruptible. Provider policy, profile installation, and HTTP parsing remain
-in `dociler-core`. The same profile service now owns confirmed removal and
-verified credential rotation. Because filesystem configuration and native
-credential stores have no shared transaction, removal/key clearing commits the
-non-secret state first and reports orphan-cleanup warnings; adding a key rolls it
-back if the required config marker cannot be published. Local onboarding,
-skills, documents, and local orchestration are still future layers.
+in `dociler-core`. The same profile service owns non-mutating connection checks,
+verified endpoint/model editing, confirmed removal, and verified credential
+rotation. Long-running mutations reload settings after verification, merge
+unrelated profile changes, and compare the target before save. Authenticated
+cross-origin editing requires explicit destination consent before native-key
+retrieval. Because filesystem configuration and native credential stores have
+no shared transaction, removal/key clearing commits the non-secret state first
+and reports orphan-cleanup warnings; adding a key rolls it back if the required
+config marker cannot be published.
+
+The terminal refreshes profiles before profile commands and prompt dispatch.
+Unrelated changes preserve context; an active-profile change resets the bounded
+session and blocks the first pending prompt so routing must be confirmed by
+resubmission. Per-session connection state is visible as unchecked, checking,
+ready, or attention, with `/connect check NAME` and `/connect edit NAME` recovery
+actions. Local onboarding, skills, documents, and local orchestration are still
+future layers.
 
 ## Failure containment
 

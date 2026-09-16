@@ -100,6 +100,16 @@ fn serve_cli_flow() -> (String, thread::JoinHandle<()>) {
                 "application/json",
                 r#"{"choices":[{"message":{"content":"OK"}}]}"#,
             ),
+            ("application/json", r#"{"data":[{"id":"model-a"}]}"#),
+            (
+                "application/json",
+                r#"{"choices":[{"message":{"content":"OK"}}]}"#,
+            ),
+            ("application/json", r#"{"data":[{"id":"model-b"}]}"#),
+            (
+                "application/json",
+                r#"{"choices":[{"message":{"content":"OK"}}]}"#,
+            ),
         ];
         for (content_type, body) in replies {
             let (mut stream, _) = listener.accept().unwrap();
@@ -313,6 +323,29 @@ fn remote_profile_add_list_and_stdin_run_work_end_to_end() {
         String::from_utf8(keyless.stdout)
             .unwrap()
             .contains("updated credential policy")
+    );
+    let checked = workspace.run(&["connect", "check", "office"]);
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    assert!(String::from_utf8(checked.stdout).unwrap().contains("ready"));
+    let edited = workspace.run(&["connect", "edit", "office", &url, "model-b"]);
+    assert!(
+        edited.status.success(),
+        "{}",
+        String::from_utf8_lossy(&edited.stderr)
+    );
+    assert!(
+        String::from_utf8(edited.stdout)
+            .unwrap()
+            .contains("updated")
+    );
+    assert!(
+        fs::read_to_string(&config_path)
+            .unwrap()
+            .contains("model-b")
     );
     server.join().unwrap();
     let unconfirmed = workspace.run(&["connect", "remove", "office"]);

@@ -65,10 +65,15 @@ malformed JSON, duplicate remote names, invalid remote endpoints, and unsupporte
 exists yet. Errors do not echo the rejected key/value or file contents.
 The parser uses [Serde's unknown-field rejection](https://serde.rs/container-attrs.html).
 
-Initialization plus verified remote-profile add, credential-policy update, and
-confirmed removal are currently available. Profile operations re-load and
-validate current settings immediately before an atomic save; they never
-serialize keys. A future permissions UI must save a grant from the canonical
+Initialization plus verified remote-profile add, health check, endpoint/model
+edit, credential-policy update, and confirmed removal are currently available.
+Profile installation, credential rotation, and endpoint/model editing reload
+and validate current settings after remote verification. They merge unrelated
+profile additions/updates and reject a stale target edit/rotation rather than
+overwriting it. Each individual save uses atomic replacement, but there is no
+cross-process transaction covering an entire verification/read/save sequence.
+Profile operations never serialize keys. A future permissions UI must save a
+grant from the canonical
 workspace identity after confirmation; there is no grant/revoke command yet. A stored grant
 matches only the exact canonical workspace, never descendants or a symlink
 alias that later points somewhere else. Its policy is **confirm every write**,
@@ -104,4 +109,6 @@ Profile removal saves configuration before deleting a key; keyless conversion
 does the same. If cleanup is denied, Dociler reports the possible orphan without
 recreating the removed/authenticated profile. A replacement key is verified
 before mutation and rolled back when a required configuration update fails.
-Destination-bound document consent will arrive with document ingestion.
+Changing an authenticated profile to a different endpoint origin requires
+explicit destination confirmation before its existing native key is retrieved
+or sent. Destination-bound document consent will arrive with document ingestion.

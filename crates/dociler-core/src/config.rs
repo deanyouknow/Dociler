@@ -164,6 +164,26 @@ impl Settings {
         *profile = profile.with_credential(credential);
         Ok(profile.clone())
     }
+
+    pub fn replace_remote_profile(
+        &mut self,
+        name: &str,
+        replacement: RemoteProfile,
+    ) -> io::Result<RemoteProfile> {
+        if replacement.name() != name {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "remote profile name cannot be changed",
+            ));
+        }
+        let profile = self
+            .remote_profiles
+            .iter_mut()
+            .find(|profile| profile.name() == name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "remote profile not found"))?;
+        *profile = replacement;
+        Ok(profile.clone())
+    }
 }
 
 fn invalid_config() -> io::Error {

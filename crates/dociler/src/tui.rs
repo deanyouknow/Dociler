@@ -17,8 +17,9 @@ use dociler_core::chat::{
 use dociler_core::credentials::{CredentialError, Secret};
 use dociler_core::paths::AppPaths;
 use dociler_core::profiles::{
-    ProfileInstallError, ProfileMutationError, ProfileRemoval, ProfileRotation,
-    install_remote_profile, remove_remote_profile, rotate_remote_credential,
+    ProfileEdit, ProfileInstallError, ProfileMutationError, ProfileRemoval, ProfileRotation,
+    check_remote_profile, edit_remote_profile, install_remote_profile, load_remote_profiles,
+    remove_remote_profile, rotate_remote_credential,
 };
 use dociler_core::remote::{RemoteError, RemoteProfile};
 use dociler_core::session::Session;
@@ -71,6 +72,7 @@ enum OnboardingStep {
     Url,
     Model,
     ApiKey,
+    ConfirmDestination,
     Verifying,
 }
 
@@ -78,6 +80,7 @@ enum OnboardingStep {
 enum OnboardingKind {
     Add,
     RotateCredential,
+    Edit,
 }
 
 struct Onboarding {
@@ -86,6 +89,8 @@ struct Onboarding {
     name: String,
     url: String,
     model: String,
+    original_url: String,
+    credential: bool,
 }
 
 impl Onboarding {
@@ -96,6 +101,8 @@ impl Onboarding {
             name: String::new(),
             url: String::new(),
             model: String::new(),
+            original_url: String::new(),
+            credential: false,
         }
     }
 
@@ -106,6 +113,20 @@ impl Onboarding {
             name: profile.name().to_owned(),
             url: profile.base_url().to_owned(),
             model: profile.model().to_owned(),
+            original_url: profile.base_url().to_owned(),
+            credential: profile.needs_credential(),
+        }
+    }
+
+    fn edit(profile: &RemoteProfile) -> Self {
+        Self {
+            kind: OnboardingKind::Edit,
+            step: OnboardingStep::Url,
+            name: profile.name().to_owned(),
+            url: profile.base_url().to_owned(),
+            model: profile.model().to_owned(),
+            original_url: profile.base_url().to_owned(),
+            credential: profile.needs_credential(),
         }
     }
 }
@@ -117,6 +138,19 @@ enum ProfileWorkerEvent {
         result: Result<ProfileRemoval, ProfileMutationError>,
     },
     Rotated(Result<ProfileRotation, ProfileMutationError>),
+    Edited(Result<ProfileEdit, ProfileMutationError>),
+    Checked {
+        name: String,
+        result: Result<RemoteProfile, ProfileMutationError>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConnectionStatus {
+    Unknown,
+    Checking(String),
+    Ready(String),
+    Failed(String),
 }
 
 pub struct App {
@@ -129,6 +163,7 @@ pub struct App {
     input: Zeroizing<String>,
     partial_answer: Zeroizing<String>,
     generation: Option<Generation>,
+    generation_profile: Option<String>,
     onboarding: Option<Onboarding>,
     profile_worker: Option<Receiver<ProfileWorkerEvent>>,
     profile_cancel: Option<CancellationToken>,
@@ -136,6 +171,7 @@ pub struct App {
     scroll: u16,
     confirm_clear: bool,
     pending_remove: Option<String>,
+    connection_status: ConnectionStatus,
     quit: bool,
 }
 
@@ -159,6 +195,7 @@ impl App {
             input: Zeroizing::new(String::new()),
             partial_answer: Zeroizing::new(String::new()),
             generation: None,
+            generation_profile: None,
             onboarding: None,
             profile_worker: None,
             profile_cancel: None,
@@ -166,6 +203,7 @@ impl App {
             scroll: 0,
             confirm_clear: false,
             pending_remove: None,
+            connection_status: ConnectionStatus::Unknown,
             quit: false,
         };
         app.notice("Welcome to Dociler. Text chat is memory-only; documents and local models are not active.");
@@ -182,6 +220,11 @@ impl App {
 
     fn selected_profile(&self) -> Option<&RemoteProfile> {
         self.selected.and_then(|index| self.profiles.get(index))
+    }
+
+    fn active_profile_is(&self, name: &str) -> bool {
+        self.selected_profile()
+            .is_some_and(|profile| profile.name() == name)
     }
 
     fn notice(&mut self, text: impl Into<String>) {
@@ -215,6 +258,17 @@ impl App {
         ));
     }
 
+    fn begin_profile_edit(&mut self, profile: RemoteProfile) {
+        self.input.zeroize();
+        self.input.clear();
+        self.input.push_str(profile.base_url());
+        let name = profile.name().to_owned();
+        self.onboarding = Some(Onboarding::edit(&profile));
+        self.notice(format!(
+            "Editing '{name}': confirm or replace the endpoint, then the model ID. The existing credential policy is preserved and the candidate must pass verification."
+        ));
+    }
+
     fn cancel_onboarding(&mut self) {
         self.input.zeroize();
         self.input.clear();
@@ -223,6 +277,9 @@ impl App {
         self.notice(match action {
             Some(OnboardingKind::RotateCredential) => {
                 "Credential update cancelled; the saved profile was not changed."
+            }
+            Some(OnboardingKind::Edit) => {
+                "Profile edit cancelled; the saved endpoint and model were not changed."
             }
             _ => "Remote setup cancelled; nothing was saved.",
         });
@@ -250,7 +307,18 @@ impl App {
         if self.onboarding.is_some() && text.as_str() == "/exit" {
             self.quit = true;
         } else if self.onboarding.is_some() && text.as_str() == "/help" {
-            self.notice("Remote setup fields: profile name, endpoint URL, model ID, then optional hidden API key. Use /back to edit the previous field, /cancel or Escape to stop, and /exit to exit Dociler.");
+            let help = match self.onboarding.as_ref().map(|onboarding| onboarding.kind) {
+                Some(OnboardingKind::Edit) => {
+                    "Profile edit fields: endpoint URL and model ID. The existing credential is reused only for verification. Use /back, /cancel or Escape, and /exit."
+                }
+                Some(OnboardingKind::RotateCredential) => {
+                    "Credential update accepts a hidden replacement key; blank requests verified keyless access. Use /cancel or Escape to stop, and /exit to exit."
+                }
+                _ => {
+                    "Remote setup fields: profile name, endpoint URL, model ID, then optional hidden API key. Use /back to edit the previous field, /cancel or Escape to stop, and /exit to exit Dociler."
+                }
+            };
+            self.notice(help);
         } else if self.onboarding.is_some() && text.as_str() == "/back" {
             self.onboarding_back();
         } else if self.onboarding.is_some() && text.as_str() == "/cancel" {
@@ -275,6 +343,27 @@ impl App {
             );
             return;
         }
+        if onboarding.kind == OnboardingKind::Edit {
+            let message = match onboarding.step {
+                OnboardingStep::Model => {
+                    onboarding.step = OnboardingStep::Url;
+                    self.input.push_str(&onboarding.url);
+                    "Edit the endpoint URL."
+                }
+                OnboardingStep::ConfirmDestination => {
+                    onboarding.step = OnboardingStep::Model;
+                    self.input.push_str(&onboarding.model);
+                    "Edit the upstream model ID."
+                }
+                OnboardingStep::Url => "Already at the first profile-edit field.",
+                OnboardingStep::Verifying => {
+                    "Verification is active. Press Escape to request cancellation first."
+                }
+                _ => "Profile edit only changes endpoint and model. Use /cancel to stop.",
+            };
+            self.notice(message);
+            return;
+        }
         let message = match onboarding.step {
             OnboardingStep::Name => "Already at the first setup field.",
             OnboardingStep::Url => {
@@ -286,6 +375,10 @@ impl App {
                 "Edit the endpoint URL."
             }
             OnboardingStep::ApiKey => {
+                onboarding.step = OnboardingStep::Model;
+                "Edit the upstream model ID."
+            }
+            OnboardingStep::ConfirmDestination => {
                 onboarding.step = OnboardingStep::Model;
                 "Edit the upstream model ID."
             }
@@ -322,6 +415,9 @@ impl App {
                 let onboarding = self.onboarding.as_mut().expect("onboarding remains active");
                 onboarding.url = input.to_owned();
                 onboarding.step = OnboardingStep::Model;
+                if onboarding.kind == OnboardingKind::Edit {
+                    self.input.push_str(&onboarding.model);
+                }
                 self.notice("Enter the exact upstream model ID exposed by /v1/models.");
             }
             OnboardingStep::Model => {
@@ -332,10 +428,38 @@ impl App {
                     );
                     return;
                 }
+                let kind = onboarding.kind;
+                let destination_consent =
+                    kind == OnboardingKind::Edit && onboarding.credential && {
+                        let original = RemoteProfile::new(
+                            &onboarding.name,
+                            &onboarding.original_url,
+                            input,
+                            true,
+                        )
+                        .expect("saved profile remains valid");
+                        let candidate =
+                            RemoteProfile::new(&onboarding.name, &onboarding.url, input, true)
+                                .expect("candidate was validated above");
+                        !original.same_origin(&candidate)
+                    };
                 let onboarding = self.onboarding.as_mut().expect("onboarding remains active");
                 onboarding.model = input.to_owned();
-                onboarding.step = OnboardingStep::ApiKey;
-                self.notice("Enter the API key, or press Enter for none. Key input is hidden and can only be saved in the OS credential store.");
+                if kind == OnboardingKind::Edit {
+                    if destination_consent {
+                        onboarding.step = OnboardingStep::ConfirmDestination;
+                        let destination = onboarding.url.clone();
+                        self.notice(format!(
+                            "The saved API key will be sent to the new origin {} for verification. Type /confirm to allow this destination once, or use /back or /cancel.",
+                            destination
+                        ));
+                    } else {
+                        self.start_profile_edit(false);
+                    }
+                } else {
+                    onboarding.step = OnboardingStep::ApiKey;
+                    self.notice("Enter the API key, or press Enter for none. Key input is hidden and can only be saved in the OS credential store.");
+                }
             }
             OnboardingStep::ApiKey => {
                 if input.len() > 16 * 1024 || input.chars().any(char::is_control) {
@@ -351,6 +475,14 @@ impl App {
                 match kind {
                     OnboardingKind::Add => self.start_profile_install(secret),
                     OnboardingKind::RotateCredential => self.start_credential_rotation(secret),
+                    OnboardingKind::Edit => unreachable!("profile edit has no API-key step"),
+                }
+            }
+            OnboardingStep::ConfirmDestination => {
+                if input == "/confirm" {
+                    self.start_profile_edit(true);
+                } else {
+                    self.error("Type /confirm to send the saved key to the displayed new origin, or use /back or /cancel.");
                 }
             }
             OnboardingStep::Verifying => {}
@@ -421,6 +553,150 @@ impl App {
         self.notice("Verifying the saved endpoint and model with the new credential policy… Escape requests cancellation before commit.");
     }
 
+    fn start_profile_edit(&mut self, allow_credential_destination_change: bool) {
+        let Some(onboarding) = &mut self.onboarding else {
+            return;
+        };
+        onboarding.step = OnboardingStep::Verifying;
+        let paths = self.paths.clone();
+        let name = onboarding.name.clone();
+        let url = onboarding.url.clone();
+        let model = onboarding.model.clone();
+        let cancellation = CancellationToken::new();
+        let worker_cancellation = cancellation.clone();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let result = edit_remote_profile(
+                &paths,
+                &name,
+                &url,
+                &model,
+                allow_credential_destination_change,
+                &worker_cancellation,
+            );
+            let _ = sender.send(ProfileWorkerEvent::Edited(result));
+        });
+        self.profile_worker = Some(receiver);
+        self.profile_cancel = Some(cancellation);
+        self.activity = Activity::VerifyingProfile;
+        self.notice("Verifying the edited endpoint and model with the existing credential policy… Escape requests cancellation before commit.");
+    }
+
+    fn start_profile_check(&mut self, name: String) {
+        let paths = self.paths.clone();
+        let cancellation = CancellationToken::new();
+        let worker_cancellation = cancellation.clone();
+        let worker_name = name.clone();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let result = check_remote_profile(&paths, &worker_name, &worker_cancellation);
+            let _ = sender.send(ProfileWorkerEvent::Checked {
+                name: worker_name,
+                result,
+            });
+        });
+        if self.active_profile_is(&name) {
+            self.connection_status = ConnectionStatus::Checking(name.clone());
+        }
+        self.profile_worker = Some(receiver);
+        self.profile_cancel = Some(cancellation);
+        self.activity = Activity::VerifyingProfile;
+        self.notice(format!(
+            "Checking endpoint, credential, model listing, and minimal generation for '{name}'…"
+        ));
+    }
+
+    fn replace_profiles(&mut self, profiles: Vec<RemoteProfile>, preferred: Option<&str>) -> bool {
+        let previous = self.selected_profile().cloned();
+        let preferred = preferred
+            .map(str::to_owned)
+            .or_else(|| previous.as_ref().map(|profile| profile.name().to_owned()));
+        self.profiles = profiles;
+        self.selected = preferred
+            .as_deref()
+            .and_then(|name| {
+                self.profiles
+                    .iter()
+                    .position(|profile| profile.name() == name)
+            })
+            .or_else(|| (!self.profiles.is_empty()).then_some(0));
+        let changed = self.selected_profile() != previous.as_ref();
+        if changed {
+            self.session = Some(Session::new(self.workspace.clone()));
+            self.connection_status = ConnectionStatus::Unknown;
+        }
+        changed
+    }
+
+    fn refresh_profiles_from_disk(&mut self, announce: bool) -> Option<bool> {
+        match load_remote_profiles(&self.paths) {
+            Ok(profiles) => {
+                let count = profiles.len();
+                let changed = self.replace_profiles(profiles, None);
+                if announce {
+                    if changed {
+                        self.notice(format!(
+                            "Reloaded {count} saved profile(s). The active profile changed, so conversation context was reset."
+                        ));
+                    } else {
+                        self.notice(format!(
+                            "Reloaded {count} saved profile(s). Active conversation context was preserved."
+                        ));
+                    }
+                } else if changed {
+                    self.notice("Saved profile state changed in another process; active conversation context was reset before continuing.");
+                }
+                Some(changed)
+            }
+            Err(error) => {
+                self.error(profile_mutation_error_message(error));
+                None
+            }
+        }
+    }
+
+    fn connection_status_text(&self) -> String {
+        let Some(profile) = self.selected_profile() else {
+            return "unavailable — add or refresh a profile".to_owned();
+        };
+        match &self.connection_status {
+            ConnectionStatus::Checking(name) if name == profile.name() => "checking now".to_owned(),
+            ConnectionStatus::Ready(name) if name == profile.name() => {
+                "ready — verified this session".to_owned()
+            }
+            ConnectionStatus::Failed(name) if name == profile.name() => format!(
+                "needs attention — use /connect check {} or /connect edit {}",
+                profile.name(),
+                profile.name()
+            ),
+            _ => format!(
+                "not checked this session — use /connect check {}",
+                profile.name()
+            ),
+        }
+    }
+
+    fn connection_badge(&self) -> &'static str {
+        let Some(profile) = self.selected_profile() else {
+            return "offline";
+        };
+        match &self.connection_status {
+            ConnectionStatus::Checking(name) if name == profile.name() => "checking",
+            ConnectionStatus::Ready(name) if name == profile.name() => "ready",
+            ConnectionStatus::Failed(name) if name == profile.name() => "attention",
+            _ => "unchecked",
+        }
+    }
+
+    fn reset_onboarding_for_retry(&mut self) {
+        if let Some(onboarding) = &mut self.onboarding {
+            onboarding.step = match onboarding.kind {
+                OnboardingKind::Edit => OnboardingStep::Model,
+                OnboardingKind::Add | OnboardingKind::RotateCredential => OnboardingStep::ApiKey,
+            };
+        }
+    }
+
     fn handle_command(&mut self, input: &str) {
         let confirmed_clear = self.confirm_clear;
         self.confirm_clear = false;
@@ -429,7 +705,7 @@ impl App {
         let command = parts.next().unwrap_or("");
         match command {
             "/help" => self.notice(
-                "/help  /status  /connect [NAME|add|remove NAME|key NAME]  /clear  /exit\nProfile removal requires repeating the exact command. Key updates are verified before commit. Esc cancels active work; PageUp/PageDown scroll.",
+                "/help  /status  /connect [NAME|add|refresh|check NAME|edit NAME|remove NAME|key NAME]  /clear  /exit\nProfile edits and keys are verified before commit; removal requires exact repetition. Esc cancels active work; PageUp/PageDown scroll.",
             ),
             "/status" => {
                 let profile = self
@@ -437,12 +713,22 @@ impl App {
                     .map(|profile| format!("{} ({})", profile.name(), profile.model()))
                     .unwrap_or_else(|| "none".to_owned());
                 self.notice(format!(
-                    "Workspace: {}\nBackend: Remote\nProfile: {profile}\nAccess: read-only\nHistory: memory-only\nLAN API: off",
-                    safe_path(self.workspace.root())
+                    "Workspace: {}\nBackend: Remote\nProfile: {profile}\nConnection: {}\nAccess: read-only\nHistory: memory-only\nLAN API: off",
+                    safe_path(self.workspace.root()),
+                    self.connection_status_text()
                 ));
             }
             "/connect" => {
                 let arguments = parts.collect::<Vec<_>>();
+                if arguments.as_slice() == ["refresh"] {
+                    self.refresh_profiles_from_disk(true);
+                    return;
+                }
+                if arguments.as_slice() != ["add"]
+                    && self.refresh_profiles_from_disk(false).is_none()
+                {
+                    return;
+                }
                 match arguments.as_slice() {
                     [] if self.profiles.is_empty() => {
                         self.notice("No profiles saved. Use /connect add to open remote setup.");
@@ -457,6 +743,25 @@ impl App {
                         self.notice(format!("Saved profiles:\n{profiles}"));
                     }
                     ["add"] => self.begin_onboarding(),
+                    ["check", name] => {
+                        if self.profiles.iter().any(|profile| profile.name() == *name) {
+                            self.start_profile_check((*name).to_owned());
+                        } else {
+                            self.error("Unknown profile. Use /connect refresh to reload saved profiles.");
+                        }
+                    }
+                    ["edit", name] => {
+                        if let Some(profile) = self
+                            .profiles
+                            .iter()
+                            .find(|profile| profile.name() == *name)
+                            .cloned()
+                        {
+                            self.begin_profile_edit(profile);
+                        } else {
+                            self.error("Unknown profile. Use /connect refresh to reload saved profiles.");
+                        }
+                    }
                     ["remove", name] => {
                         if !self.profiles.iter().any(|profile| profile.name() == *name) {
                             self.error("Unknown profile. Use /connect to list saved profiles.");
@@ -489,6 +794,7 @@ impl App {
                         {
                             self.selected = Some(index);
                             self.session = Some(Session::new(self.workspace.clone()));
+                            self.connection_status = ConnectionStatus::Unknown;
                             self.confirm_clear = false;
                             self.notice(format!(
                                 "Switched to {name}. Conversation context was reset."
@@ -498,7 +804,7 @@ impl App {
                         }
                     }
                     _ => self.error(
-                        "Usage: /connect, /connect NAME, /connect add, /connect remove NAME, or /connect key NAME",
+                        "Usage: /connect, /connect NAME, /connect add, /connect refresh, /connect check NAME, /connect edit NAME, /connect remove NAME, or /connect key NAME",
                     ),
                 }
             }
@@ -525,6 +831,14 @@ impl App {
     }
 
     fn start_generation(&mut self, prompt: String) {
+        match self.refresh_profiles_from_disk(false) {
+            Some(false) => {}
+            Some(true) => {
+                self.error("The active profile changed before this prompt was sent. Review /status, then submit the prompt again to confirm the destination.");
+                return;
+            }
+            None => return,
+        }
         let Some(profile) = self.selected_profile().cloned() else {
             self.error("No active remote profile. Use /connect or add one outside this screen.");
             return;
@@ -533,6 +847,7 @@ impl App {
             self.error("Conversation state is unavailable; use /clear before retrying.");
             return;
         };
+        let profile_name = profile.name().to_owned();
         let generation = match Generation::start(
             session,
             prompt.clone(),
@@ -551,6 +866,7 @@ impl App {
         self.partial_answer.clear();
         self.confirm_clear = false;
         self.activity = Activity::Generating;
+        self.generation_profile = Some(profile_name);
         self.scroll = u16::MAX;
 
         self.generation = Some(generation);
@@ -566,6 +882,9 @@ impl App {
                     self.generation = None;
                     self.activity = Activity::Ready;
                     self.session = Some(Session::new(self.workspace.clone()));
+                    if let Some(name) = self.generation_profile.take() {
+                        self.connection_status = ConnectionStatus::Failed(name);
+                    }
                     self.error(
                         "The response worker ended unexpectedly; conversation context was reset.",
                     );
@@ -583,6 +902,9 @@ impl App {
                     self.session = Some(session);
                     self.generation = None;
                     self.activity = Activity::Ready;
+                    if let Some(name) = self.generation_profile.take() {
+                        self.connection_status = ConnectionStatus::Ready(name);
+                    }
                     break;
                 }
                 GenerationEvent::Failed(session, error) => {
@@ -590,6 +912,13 @@ impl App {
                     self.session = Some(session);
                     self.generation = None;
                     self.activity = Activity::Ready;
+                    if connectivity_failure(error) {
+                        if let Some(name) = self.generation_profile.take() {
+                            self.connection_status = ConnectionStatus::Failed(name);
+                        }
+                    } else {
+                        self.generation_profile = None;
+                    }
                     self.error(worker_error_message(error));
                     break;
                 }
@@ -605,8 +934,13 @@ impl App {
                 self.profile_worker = None;
                 self.profile_cancel = None;
                 self.activity = Activity::Ready;
-                if let Some(onboarding) = &mut self.onboarding {
-                    onboarding.step = OnboardingStep::ApiKey;
+                self.reset_onboarding_for_retry();
+                let checking = match &self.connection_status {
+                    ConnectionStatus::Checking(name) => Some(name.clone()),
+                    _ => None,
+                };
+                if let Some(name) = checking {
+                    self.connection_status = ConnectionStatus::Failed(name);
                 }
                 self.error("Profile worker ended unexpectedly; inspect saved configuration before retrying.");
                 return;
@@ -618,13 +952,22 @@ impl App {
         match event {
             ProfileWorkerEvent::Installed(result) => match result {
                 Ok(profile) => {
-                    self.profiles.push(profile.clone());
-                    self.selected = Some(self.profiles.len() - 1);
-                    self.session = Some(Session::new(self.workspace.clone()));
+                    let name = profile.name().to_owned();
+                    match load_remote_profiles(&self.paths) {
+                        Ok(profiles) => {
+                            self.replace_profiles(profiles, Some(&name));
+                        }
+                        Err(_) => {
+                            self.profiles.push(profile);
+                            self.selected = Some(self.profiles.len() - 1);
+                            self.session = Some(Session::new(self.workspace.clone()));
+                        }
+                    }
+                    self.connection_status = ConnectionStatus::Ready(name.clone());
                     self.onboarding = None;
                     self.notice(format!(
                         "Saved and selected profile '{}'. Conversation context is empty.",
-                        profile.name()
+                        name
                     ));
                 }
                 Err(ProfileInstallError::Cancelled) => {
@@ -632,29 +975,13 @@ impl App {
                     self.notice("Remote setup cancelled; no profile or credential was saved.");
                 }
                 Err(error) => {
-                    if let Some(onboarding) = &mut self.onboarding {
-                        onboarding.step = OnboardingStep::ApiKey;
-                    }
+                    self.reset_onboarding_for_retry();
                     self.error(profile_install_error_message(error));
                 }
             },
             ProfileWorkerEvent::Removed { name, result } => match result {
                 Ok(outcome) => {
-                    let selected_name = self
-                        .selected_profile()
-                        .map(|profile| profile.name().to_owned());
-                    self.profiles = outcome.profiles().to_vec();
-                    self.selected = selected_name
-                        .as_deref()
-                        .and_then(|selected| {
-                            self.profiles
-                                .iter()
-                                .position(|profile| profile.name() == selected)
-                        })
-                        .or_else(|| (!self.profiles.is_empty()).then_some(0));
-                    if selected_name.as_deref() == Some(name.as_str()) {
-                        self.session = Some(Session::new(self.workspace.clone()));
-                    }
+                    self.replace_profiles(outcome.profiles().to_vec(), None);
                     self.notice(format!("Removed profile '{name}'."));
                     if outcome.credential_cleanup_warning().is_some() {
                         self.error("The profile was removed, but its old native credential could not be deleted. Remove that credential manually from the OS credential manager.");
@@ -673,21 +1000,9 @@ impl App {
             ProfileWorkerEvent::Rotated(result) => match result {
                 Ok(outcome) => {
                     let name = outcome.profile().name().to_owned();
-                    let selected_name = self
-                        .selected_profile()
-                        .map(|profile| profile.name().to_owned());
-                    let reset_selected = selected_name.as_deref() == Some(name.as_str());
-                    self.profiles = outcome.profiles().to_vec();
-                    self.selected = selected_name
-                        .as_deref()
-                        .and_then(|selected| {
-                            self.profiles
-                                .iter()
-                                .position(|profile| profile.name() == selected)
-                        })
-                        .or_else(|| (!self.profiles.is_empty()).then_some(0));
-                    if reset_selected {
-                        self.session = Some(Session::new(self.workspace.clone()));
+                    self.replace_profiles(outcome.profiles().to_vec(), None);
+                    if self.active_profile_is(&name) {
+                        self.connection_status = ConnectionStatus::Ready(name.clone());
                     }
                     self.onboarding = None;
                     self.notice(format!(
@@ -702,8 +1017,57 @@ impl App {
                     self.notice("Credential update cancelled; the saved profile was not changed.");
                 }
                 Err(error) => {
-                    if let Some(onboarding) = &mut self.onboarding {
-                        onboarding.step = OnboardingStep::ApiKey;
+                    self.reset_onboarding_for_retry();
+                    self.error(profile_mutation_error_message(error));
+                }
+            },
+            ProfileWorkerEvent::Edited(result) => match result {
+                Ok(outcome) => {
+                    let name = outcome.profile().name().to_owned();
+                    self.replace_profiles(outcome.profiles().to_vec(), None);
+                    if self.active_profile_is(&name) {
+                        self.connection_status = ConnectionStatus::Ready(name.clone());
+                    }
+                    self.onboarding = None;
+                    self.notice(format!(
+                        "Verified and updated endpoint/model for '{name}'. Conversation context was reset if it was active."
+                    ));
+                }
+                Err(ProfileMutationError::Cancelled) => {
+                    self.onboarding = None;
+                    self.notice("Profile edit cancelled; the saved profile was not changed.");
+                }
+                Err(error) => {
+                    self.reset_onboarding_for_retry();
+                    self.error(profile_mutation_error_message(error));
+                }
+            },
+            ProfileWorkerEvent::Checked { name, result } => match result {
+                Ok(checked) => {
+                    let refreshed = self.refresh_profiles_from_disk(false);
+                    if refreshed.is_some()
+                        && self.profiles.iter().any(|profile| profile == &checked)
+                    {
+                        if self.active_profile_is(&name) {
+                            self.connection_status = ConnectionStatus::Ready(name.clone());
+                        }
+                        self.notice(format!(
+                            "Connection ready for '{name}': endpoint, credential, model listing, and minimal generation passed."
+                        ));
+                    } else if refreshed.is_some() {
+                        self.connection_status = ConnectionStatus::Unknown;
+                        self.notice("The profile changed while its connection check was running. Refreshed saved state; check it again before use.");
+                    }
+                }
+                Err(ProfileMutationError::Cancelled) => {
+                    if self.active_profile_is(&name) {
+                        self.connection_status = ConnectionStatus::Unknown;
+                    }
+                    self.notice("Connection check cancelled; saved profile state was not changed.");
+                }
+                Err(error) => {
+                    if self.active_profile_is(&name) {
+                        self.connection_status = ConnectionStatus::Failed(name);
                     }
                     self.error(profile_mutation_error_message(error));
                 }
@@ -776,6 +1140,15 @@ impl App {
             _ => {}
         }
     }
+}
+
+fn connectivity_failure(error: ChatError) -> bool {
+    matches!(error, ChatError::Credential(_))
+        || matches!(
+            error,
+            ChatError::Remote(remote)
+                if !matches!(remote, RemoteError::Cancelled | RemoteError::Output)
+        )
 }
 
 fn worker_error_message(error: ChatError) -> &'static str {
@@ -897,6 +1270,12 @@ fn profile_mutation_error_message(error: ProfileMutationError) -> &'static str {
         ProfileMutationError::NotFound => {
             "The saved profile no longer exists. Use /connect to refresh the list."
         }
+        ProfileMutationError::Conflict => {
+            "The profile changed in another process while verification was running. Nothing was overwritten; use /connect refresh and retry."
+        }
+        ProfileMutationError::DestinationConsentRequired => {
+            "The authenticated endpoint origin changed. No key was sent; review the displayed destination and explicitly confirm before retrying."
+        }
     }
 }
 
@@ -922,6 +1301,7 @@ fn render(frame: &mut Frame<'_>, app: &App) {
         .selected_profile()
         .map(|profile| format!("{} · {}", profile.name(), profile.model()))
         .unwrap_or_else(|| "no remote profile".to_owned());
+    let connection = app.connection_badge();
     let header = Paragraph::new(vec![
         Line::from(Span::styled(
             "DOCILER",
@@ -930,7 +1310,7 @@ fn render(frame: &mut Frame<'_>, app: &App) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(format!(
-            "Remote · {profile} · read-only · memory-only · API off"
+            "Remote · {profile} · {connection} · read-only · memory-only · API off"
         )),
     ])
     .block(Block::default().borders(Borders::ALL));
@@ -985,6 +1365,18 @@ fn render(frame: &mut Frame<'_>, app: &App) {
     let displayed_input = masked_input.as_deref().unwrap_or(app.input.as_str());
     let onboarding_kind = app.onboarding.as_ref().map(|onboarding| onboarding.kind);
     let composer_title = match (onboarding_kind, onboarding_step) {
+        (Some(OnboardingKind::Edit), Some(OnboardingStep::Url)) => {
+            " Profile edit 1/2 · Endpoint URL · Esc cancel "
+        }
+        (Some(OnboardingKind::Edit), Some(OnboardingStep::Model)) => {
+            " Profile edit 2/2 · Model ID · Esc cancel "
+        }
+        (Some(OnboardingKind::Edit), Some(OnboardingStep::Verifying)) => {
+            " Verifying profile edit · Esc cancel "
+        }
+        (Some(OnboardingKind::Edit), Some(OnboardingStep::ConfirmDestination)) => {
+            " Confirm credential destination · type /confirm · Esc cancel "
+        }
         (Some(OnboardingKind::RotateCredential), Some(OnboardingStep::ApiKey)) => {
             " Credential update · replacement key (hidden; blank removes) · Esc cancel "
         }
@@ -996,6 +1388,9 @@ fn render(frame: &mut Frame<'_>, app: &App) {
         (_, Some(OnboardingStep::Model)) => " Remote setup 3/4 · Model ID · Esc cancel ",
         (_, Some(OnboardingStep::ApiKey)) => {
             " Remote setup 4/4 · API key (hidden, optional) · Esc cancel "
+        }
+        (_, Some(OnboardingStep::ConfirmDestination)) => {
+            " Confirm credential destination · type /confirm · Esc cancel "
         }
         (_, Some(OnboardingStep::Verifying)) => " Verifying remote profile · Esc cancel ",
         (_, None) => " Message · Enter send · Alt+Enter newline ",
@@ -1102,6 +1497,12 @@ mod tests {
             RemoteProfile::new("one", "https://one.example", "model-1", false).unwrap(),
             RemoteProfile::new("two", "https://two.example", "model-2", false).unwrap(),
         ];
+        let store = dociler_core::config::ConfigStore::new(paths.clone());
+        let mut settings = store.load().unwrap().settings;
+        for profile in &profiles {
+            settings.add_remote_profile(profile.clone()).unwrap();
+        }
+        store.save(&settings).unwrap();
         (dir, App::new(workspace, paths, profiles, Some("one")))
     }
 
@@ -1313,11 +1714,6 @@ mod tests {
     fn profile_removal_requires_exact_repetition_and_resets_active_context() {
         let (_dir, mut app) = app();
         let store = dociler_core::config::ConfigStore::new(app.paths.clone());
-        let mut settings = store.load().unwrap().settings;
-        for profile in &app.profiles {
-            settings.add_remote_profile(profile.clone()).unwrap();
-        }
-        store.save(&settings).unwrap();
         app.session
             .as_mut()
             .unwrap()
@@ -1353,5 +1749,138 @@ mod tests {
                 .remote_profile("one")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn refresh_preserves_context_for_unrelated_changes_and_resets_changed_active_profile() {
+        let (_dir, mut app) = app();
+        let store = dociler_core::config::ConfigStore::new(app.paths.clone());
+        app.session
+            .as_mut()
+            .unwrap()
+            .push(
+                dociler_core::session::Role::User,
+                "keep until active changes".to_owned(),
+            )
+            .unwrap();
+
+        let mut settings = store.load().unwrap().settings;
+        settings
+            .add_remote_profile(
+                RemoteProfile::new("three", "https://three.example", "model-3", false).unwrap(),
+            )
+            .unwrap();
+        store.save(&settings).unwrap();
+        command(&mut app, "/connect refresh");
+        assert_eq!(app.profiles.len(), 3);
+        assert_eq!(app.session.as_ref().unwrap().messages().len(), 1);
+
+        let mut settings = store.load().unwrap().settings;
+        settings
+            .replace_remote_profile(
+                "one",
+                RemoteProfile::new("one", "https://changed.example", "changed", false).unwrap(),
+            )
+            .unwrap();
+        store.save(&settings).unwrap();
+        command(&mut app, "/connect refresh");
+        assert_eq!(app.selected_profile().unwrap().model(), "changed");
+        assert!(app.session.as_ref().unwrap().messages().is_empty());
+        assert_eq!(app.connection_status, ConnectionStatus::Unknown);
+    }
+
+    #[test]
+    fn prompt_is_not_sent_after_a_concurrent_active_profile_change() {
+        let (_dir, mut app) = app();
+        let store = dociler_core::config::ConfigStore::new(app.paths.clone());
+        let mut settings = store.load().unwrap().settings;
+        settings
+            .replace_remote_profile(
+                "one",
+                RemoteProfile::new(
+                    "one",
+                    "https://different-destination.example",
+                    "different-model",
+                    false,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        store.save(&settings).unwrap();
+
+        command(&mut app, "do not disclose this prompt");
+
+        assert!(app.generation.is_none());
+        assert_eq!(app.activity, Activity::Ready);
+        assert!(app.session.as_ref().unwrap().messages().is_empty());
+        assert!(app.transcript.iter().all(|entry| {
+            entry.text.as_str() != "do not disclose this prompt"
+                || matches!(entry.kind, EntryKind::Error | EntryKind::Notice)
+        }));
+        let error = app.transcript.last().unwrap().text.as_str();
+        assert!(error.contains("active profile changed"));
+        assert!(error.contains("submit the prompt again"));
+    }
+
+    #[test]
+    fn profile_edit_prefills_fields_and_status_gives_a_recovery_action() {
+        let (_dir, mut app) = app();
+        command(&mut app, "/connect edit one");
+        let onboarding = app.onboarding.as_ref().unwrap();
+        assert_eq!(onboarding.kind, OnboardingKind::Edit);
+        assert_eq!(onboarding.step, OnboardingStep::Url);
+        assert_eq!(app.input.as_str(), "https://one.example/v1/");
+
+        app.input.clear();
+        command(&mut app, "https://replacement.example/v1");
+        assert_eq!(app.onboarding.as_ref().unwrap().step, OnboardingStep::Model);
+        assert_eq!(app.input.as_str(), "model-1");
+        app.input.clear();
+        command(&mut app, "/back");
+        assert_eq!(app.onboarding.as_ref().unwrap().step, OnboardingStep::Url);
+        assert_eq!(app.input.as_str(), "https://replacement.example/v1");
+        app.cancel_onboarding();
+
+        app.connection_status = ConnectionStatus::Failed("one".to_owned());
+        command(&mut app, "/status");
+        let status = app.transcript.last().unwrap().text.as_str();
+        assert!(status.contains("needs attention"));
+        assert!(status.contains("/connect check one"));
+        assert!(status.contains("/connect edit one"));
+    }
+
+    #[test]
+    fn authenticated_origin_edit_requires_explicit_destination_confirmation() {
+        let (_dir, mut app) = app();
+        let store = dociler_core::config::ConfigStore::new(app.paths.clone());
+        let mut settings = store.load().unwrap().settings;
+        settings
+            .replace_remote_profile(
+                "one",
+                RemoteProfile::new("one", "https://one.example", "model-1", true).unwrap(),
+            )
+            .unwrap();
+        store.save(&settings).unwrap();
+
+        command(&mut app, "/connect edit one");
+        app.input.clear();
+        command(&mut app, "https://new-origin.example/v1");
+        app.input.clear();
+        command(&mut app, "new-model");
+
+        assert_eq!(
+            app.onboarding.as_ref().unwrap().step,
+            OnboardingStep::ConfirmDestination
+        );
+        assert!(app.profile_worker.is_none());
+        assert!(
+            app.transcript
+                .last()
+                .unwrap()
+                .text
+                .contains("new-origin.example")
+        );
+        command(&mut app, "/back");
+        assert_eq!(app.onboarding.as_ref().unwrap().step, OnboardingStep::Model);
     }
 }

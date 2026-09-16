@@ -23,6 +23,8 @@ pub enum ProfileMutationError {
     Remote(RemoteError),
     Cancelled,
     NotFound,
+    Conflict,
+    DestinationConsentRequired,
     CredentialRollback(CredentialError),
 }
 
@@ -45,6 +47,21 @@ pub struct ProfileRotation {
     profile: RemoteProfile,
     profiles: Vec<RemoteProfile>,
     credential_cleanup_warning: Option<CredentialError>,
+}
+
+pub struct ProfileEdit {
+    profile: RemoteProfile,
+    profiles: Vec<RemoteProfile>,
+}
+
+impl ProfileEdit {
+    pub fn profile(&self) -> &RemoteProfile {
+        &self.profile
+    }
+
+    pub fn profiles(&self) -> &[RemoteProfile] {
+        &self.profiles
+    }
 }
 
 impl ProfileRotation {
@@ -123,10 +140,9 @@ pub fn install_remote_profile_with<S: CredentialStore, V: ProfileVerifier>(
         .map_err(|error| ProfileInstallError::Config(error.kind()))?;
     let profile = RemoteProfile::new(name, url, model, secret.is_some())
         .map_err(ProfileInstallError::Remote)?;
-    loaded
-        .settings
-        .add_remote_profile(profile.clone())
-        .map_err(|error| ProfileInstallError::Config(error.kind()))?;
+    if loaded.settings.remote_profile(name).is_some() {
+        return Err(ProfileInstallError::Config(io::ErrorKind::AlreadyExists));
+    }
     if let Err(error) = verifier.verify(&profile, secret.as_ref(), cancellation) {
         return if cancellation.is_cancelled() || error == RemoteError::Cancelled {
             Err(ProfileInstallError::Cancelled)
@@ -137,6 +153,14 @@ pub fn install_remote_profile_with<S: CredentialStore, V: ProfileVerifier>(
     if cancellation.is_cancelled() {
         return Err(ProfileInstallError::Cancelled);
     }
+
+    loaded = store
+        .load()
+        .map_err(|error| ProfileInstallError::Config(error.kind()))?;
+    loaded
+        .settings
+        .add_remote_profile(profile.clone())
+        .map_err(|error| ProfileInstallError::Config(error.kind()))?;
 
     let credential_id = profile.credential_id();
     if let Some(secret) = &secret {
@@ -165,6 +189,160 @@ pub fn remove_remote_profile(
     cancellation: &CancellationToken,
 ) -> Result<ProfileRemoval, ProfileMutationError> {
     remove_remote_profile_with(paths, name, cancellation, &OsCredentialStore)
+}
+
+pub fn load_remote_profiles(paths: &AppPaths) -> Result<Vec<RemoteProfile>, ProfileMutationError> {
+    ConfigStore::new(paths.clone())
+        .load()
+        .map(|loaded| loaded.settings.remote_profiles().to_vec())
+        .map_err(|error| ProfileMutationError::Config(error.kind()))
+}
+
+pub fn check_remote_profile(
+    paths: &AppPaths,
+    name: &str,
+    cancellation: &CancellationToken,
+) -> Result<RemoteProfile, ProfileMutationError> {
+    check_remote_profile_with(
+        paths,
+        name,
+        cancellation,
+        &OsCredentialStore,
+        &NetworkProfileVerifier,
+    )
+}
+
+pub fn check_remote_profile_with<S: CredentialStore, V: ProfileVerifier>(
+    paths: &AppPaths,
+    name: &str,
+    cancellation: &CancellationToken,
+    credentials: &S,
+    verifier: &V,
+) -> Result<RemoteProfile, ProfileMutationError> {
+    if cancellation.is_cancelled() {
+        return Err(ProfileMutationError::Cancelled);
+    }
+    let profile = ConfigStore::new(paths.clone())
+        .load()
+        .map_err(|error| ProfileMutationError::Config(error.kind()))?
+        .settings
+        .remote_profile(name)
+        .cloned()
+        .ok_or(ProfileMutationError::NotFound)?;
+    let secret = profile_secret(&profile, credentials)?;
+    verifier
+        .verify(&profile, secret.as_ref(), cancellation)
+        .map_err(|error| {
+            if cancellation.is_cancelled() || error == RemoteError::Cancelled {
+                ProfileMutationError::Cancelled
+            } else {
+                ProfileMutationError::Remote(error)
+            }
+        })?;
+    if cancellation.is_cancelled() {
+        return Err(ProfileMutationError::Cancelled);
+    }
+    Ok(profile)
+}
+
+pub fn edit_remote_profile(
+    paths: &AppPaths,
+    name: &str,
+    url: &str,
+    model: &str,
+    allow_credential_destination_change: bool,
+    cancellation: &CancellationToken,
+) -> Result<ProfileEdit, ProfileMutationError> {
+    edit_remote_profile_with(
+        paths,
+        name,
+        url,
+        model,
+        allow_credential_destination_change,
+        cancellation,
+        &OsCredentialStore,
+        &NetworkProfileVerifier,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn edit_remote_profile_with<S: CredentialStore, V: ProfileVerifier>(
+    paths: &AppPaths,
+    name: &str,
+    url: &str,
+    model: &str,
+    allow_credential_destination_change: bool,
+    cancellation: &CancellationToken,
+    credentials: &S,
+    verifier: &V,
+) -> Result<ProfileEdit, ProfileMutationError> {
+    if cancellation.is_cancelled() {
+        return Err(ProfileMutationError::Cancelled);
+    }
+    let store = ConfigStore::new(paths.clone());
+    let loaded = store
+        .load()
+        .map_err(|error| ProfileMutationError::Config(error.kind()))?;
+    let current = loaded
+        .settings
+        .remote_profile(name)
+        .cloned()
+        .ok_or(ProfileMutationError::NotFound)?;
+    let candidate = RemoteProfile::new(name, url, model, current.needs_credential())
+        .map_err(ProfileMutationError::Remote)?;
+    if current.needs_credential()
+        && !current.same_origin(&candidate)
+        && !allow_credential_destination_change
+    {
+        return Err(ProfileMutationError::DestinationConsentRequired);
+    }
+    let secret = profile_secret(&current, credentials)?;
+    verifier
+        .verify(&candidate, secret.as_ref(), cancellation)
+        .map_err(|error| {
+            if cancellation.is_cancelled() || error == RemoteError::Cancelled {
+                ProfileMutationError::Cancelled
+            } else {
+                ProfileMutationError::Remote(error)
+            }
+        })?;
+    if cancellation.is_cancelled() {
+        return Err(ProfileMutationError::Cancelled);
+    }
+
+    let mut latest = store
+        .load()
+        .map_err(|error| ProfileMutationError::Config(error.kind()))?;
+    if latest.settings.remote_profile(name) != Some(&current) {
+        return Err(ProfileMutationError::Conflict);
+    }
+    latest
+        .settings
+        .replace_remote_profile(name, candidate.clone())
+        .map_err(|error| ProfileMutationError::Config(error.kind()))?;
+    store
+        .save(&latest.settings)
+        .map_err(|error| ProfileMutationError::Config(error.kind()))?;
+    Ok(ProfileEdit {
+        profile: candidate,
+        profiles: latest.settings.remote_profiles().to_vec(),
+    })
+}
+
+fn profile_secret<S: CredentialStore>(
+    profile: &RemoteProfile,
+    credentials: &S,
+) -> Result<Option<Secret>, ProfileMutationError> {
+    if !profile.needs_credential() {
+        return Ok(None);
+    }
+    credentials
+        .get(&profile.credential_id())
+        .map_err(ProfileMutationError::Credential)?
+        .ok_or(ProfileMutationError::Credential(
+            CredentialError::Unavailable,
+        ))
+        .map(Some)
 }
 
 pub fn remove_remote_profile_with<S: CredentialStore>(
@@ -247,6 +425,13 @@ pub fn rotate_remote_credential_with<S: CredentialStore, V: ProfileVerifier>(
     }
     if cancellation.is_cancelled() {
         return Err(ProfileMutationError::Cancelled);
+    }
+
+    loaded = store
+        .load()
+        .map_err(|error| ProfileMutationError::Config(error.kind()))?;
+    if loaded.settings.remote_profile(name) != Some(&current) {
+        return Err(ProfileMutationError::Conflict);
     }
 
     let credential_id = current.credential_id();
@@ -365,6 +550,65 @@ mod tests {
         ) -> Result<(), RemoteError> {
             cancellation.cancel();
             Err(RemoteError::Cancelled)
+        }
+    }
+
+    struct ConcurrentProfileChange {
+        paths: AppPaths,
+    }
+
+    impl ProfileVerifier for ConcurrentProfileChange {
+        fn verify(
+            &self,
+            profile: &RemoteProfile,
+            _: Option<&Secret>,
+            _: &CancellationToken,
+        ) -> Result<(), RemoteError> {
+            let store = ConfigStore::new(self.paths.clone());
+            let mut settings = store.load().unwrap().settings;
+            settings
+                .replace_remote_profile(
+                    profile.name(),
+                    RemoteProfile::new(
+                        profile.name(),
+                        "https://concurrent.example/v1",
+                        "concurrent-model",
+                        profile.needs_credential(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            store.save(&settings).unwrap();
+            Ok(())
+        }
+    }
+
+    struct ConcurrentProfileAddition {
+        paths: AppPaths,
+    }
+
+    impl ProfileVerifier for ConcurrentProfileAddition {
+        fn verify(
+            &self,
+            _: &RemoteProfile,
+            _: Option<&Secret>,
+            _: &CancellationToken,
+        ) -> Result<(), RemoteError> {
+            let store = ConfigStore::new(self.paths.clone());
+            let mut settings = store.load().unwrap().settings;
+            settings
+                .add_remote_profile(
+                    RemoteProfile::new(
+                        "concurrent",
+                        "https://concurrent.example/v1",
+                        "other-model",
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            store.save(&settings).unwrap();
+            Ok(())
         }
     }
 
@@ -687,6 +931,141 @@ mod tests {
                 .remote_profile("office")
                 .unwrap()
                 .needs_credential()
+        );
+    }
+
+    #[test]
+    fn profile_check_and_edit_preserve_the_native_credential_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        save_profile(&paths, true);
+        let credentials = MemoryCredentials::default();
+        credentials
+            .set(
+                &RemoteProfile::new("office", "https://example.com/v1", "model", true)
+                    .unwrap()
+                    .credential_id(),
+                &Secret::new("preserved-secret".to_owned()),
+            )
+            .unwrap();
+
+        let checked = check_remote_profile_with(
+            &paths,
+            "office",
+            &CancellationToken::new(),
+            &credentials,
+            &Accept,
+        )
+        .unwrap();
+        assert!(checked.needs_credential());
+
+        let edited = edit_remote_profile_with(
+            &paths,
+            "office",
+            "https://new.example/v1",
+            "new-model",
+            true,
+            &CancellationToken::new(),
+            &credentials,
+            &Accept,
+        )
+        .unwrap();
+        assert_eq!(edited.profile().base_url(), "https://new.example/v1/");
+        assert_eq!(edited.profile().model(), "new-model");
+        assert!(edited.profile().needs_credential());
+        assert_eq!(
+            credentials.0.lock().unwrap().as_deref(),
+            Some("preserved-secret")
+        );
+    }
+
+    #[test]
+    fn edit_refuses_to_overwrite_a_concurrent_target_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        save_profile(&paths, false);
+
+        assert!(matches!(
+            edit_remote_profile_with(
+                &paths,
+                "office",
+                "https://requested.example/v1",
+                "requested-model",
+                false,
+                &CancellationToken::new(),
+                &MemoryCredentials::default(),
+                &ConcurrentProfileChange {
+                    paths: paths.clone(),
+                },
+            ),
+            Err(ProfileMutationError::Conflict)
+        ));
+        let saved = ConfigStore::new(paths)
+            .load()
+            .unwrap()
+            .settings
+            .remote_profile("office")
+            .cloned()
+            .unwrap();
+        assert_eq!(saved.base_url(), "https://concurrent.example/v1/");
+        assert_eq!(saved.model(), "concurrent-model");
+    }
+
+    #[test]
+    fn authenticated_origin_change_requires_consent_before_secret_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        save_profile(&paths, true);
+
+        assert!(matches!(
+            edit_remote_profile_with(
+                &paths,
+                "office",
+                "https://different.example/v1",
+                "model",
+                false,
+                &CancellationToken::new(),
+                &MemoryCredentials::default(),
+                &Accept,
+            ),
+            Err(ProfileMutationError::DestinationConsentRequired)
+        ));
+        let saved = ConfigStore::new(paths)
+            .load()
+            .unwrap()
+            .settings
+            .remote_profile("office")
+            .cloned()
+            .unwrap();
+        assert_eq!(saved.base_url(), "https://example.com/v1/");
+    }
+
+    #[test]
+    fn install_reloads_and_preserves_an_unrelated_concurrent_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+
+        install_remote_profile_with(
+            &paths,
+            "office",
+            "https://example.com/v1",
+            "model",
+            None,
+            &CancellationToken::new(),
+            &MemoryCredentials::default(),
+            &ConcurrentProfileAddition {
+                paths: paths.clone(),
+            },
+        )
+        .unwrap();
+
+        let profiles = load_remote_profiles(&paths).unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert!(profiles.iter().any(|profile| profile.name() == "office"));
+        assert!(
+            profiles
+                .iter()
+                .any(|profile| profile.name() == "concurrent")
         );
     }
 }

@@ -39,6 +39,7 @@ class MockProvider(http.server.ThreadingHTTPServer):
         self.lock = threading.Lock()
         self.requests: list[dict[str, object]] = []
         self.stream_count = 0
+        self.verification_count = 0
         self.verified = threading.Event()
         self.first_sent = threading.Event()
         self.partial_sent = threading.Event()
@@ -80,6 +81,8 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
         with self.provider.lock:
             self.provider.requests.append(request)
         if not request.get("stream"):
+            with self.provider.lock:
+                self.provider.verification_count += 1
             self.send_bytes(
                 "application/json",
                 json.dumps(
@@ -225,6 +228,18 @@ def wait_for_file(path: pathlib.Path, timeout: float = 5.0) -> None:
     raise AssertionError(f"timed out waiting for {path}")
 
 
+def wait_for_verifications(
+    provider: MockProvider, expected: int, timeout: float = 5.0
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with provider.lock:
+            if provider.verification_count >= expected:
+                return
+        time.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {expected} profile verifications")
+
+
 def run(executable: pathlib.Path) -> None:
     if os.name != "posix":
         raise SystemExit("PTY integration requires a POSIX host")
@@ -258,6 +273,9 @@ def run(executable: pathlib.Path) -> None:
             session.send_line("first PTY prompt")
             if not provider.first_sent.wait(5):
                 raise AssertionError("first chat turn did not reach the mock provider")
+            session.drain_for(0.5)
+            session.send_line("/connect check pty-profile")
+            wait_for_verifications(provider, 2)
             session.drain_for(0.5)
             session.send_line("second PTY prompt")
             if not provider.partial_sent.wait(5):
@@ -299,7 +317,9 @@ def main() -> None:
     parser.add_argument("executable", type=pathlib.Path)
     arguments = parser.parse_args()
     run(arguments.executable)
-    print("Passed: TUI PTY onboarding, multi-turn chat, cancellation, resize, and cleanup.")
+    print(
+        "Passed: TUI PTY onboarding, health check, multi-turn chat, cancellation, resize, and cleanup."
+    )
 
 
 if __name__ == "__main__":

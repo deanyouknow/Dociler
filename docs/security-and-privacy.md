@@ -61,6 +61,23 @@ that may no longer be usable. These operations cannot be atomic across an OS
 credential manager and the config filesystem; the chosen order keeps saved
 profiles usable and avoids silently weakening authentication.
 
+Editing an authenticated profile to a different scheme, host, or effective port
+requires explicit destination confirmation. The non-interactive command requires
+`--confirm-credential-destination`; the TUI shows the normalized destination and
+requires typed `/confirm`. Without confirmation, the core service rejects the
+operation before it asks the credential store for the key or opens a network
+connection. Model-only and same-origin edits retain the existing policy without
+an additional destination prompt.
+
+Profile installation, credential rotation, and endpoint/model editing reload
+validated settings after remote verification. Unrelated concurrent profile
+changes are merged, while a changed edit/rotation target produces a conflict
+instead of being overwritten. The TUI refreshes profiles before commands and
+before every prompt. If the active profile changed, it clears model context and
+holds the prompt until the user submits again. These checks reduce stale-state
+disclosure and overwrite risk, but do not claim a fully serializable transaction
+across independent processes and the OS credential manager.
+
 ## Filesystem containment
 
 - Canonicalize workspace and candidate paths immediately before access to reduce

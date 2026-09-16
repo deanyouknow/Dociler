@@ -200,3 +200,26 @@ that cannot list and minimally invoke the configured model.
 **Rejected:** Deleting the key before its profile/marker, silently ignoring
 cleanup failures, storing recovery copies in configuration, replacing profiles
 without verification, and one-keystroke destructive removal.
+
+## ADR-016: Refresh before disclosure and compare verified profile mutations
+
+**Decision:** Reload saved profiles before terminal commands and every prompt.
+Preserve the conversation when only unrelated profiles changed; reset context
+and require prompt resubmission when the active destination, model, or credential
+policy changed. After a long remote verification, reload settings again, merge
+unrelated changes, and reject an edit or credential rotation if its target no
+longer matches the verified starting state. Require explicit confirmation before
+retrieving or sending an authenticated profile's existing key to a different
+scheme, host, or effective port.
+
+**Why:** A terminal session can outlive changes made by another Dociler process.
+Routing a queued prompt with stale assumptions risks disclosure, while blindly
+saving verified stale state risks overwriting another user's update. Explicit
+cross-origin key consent makes the credential destination visible at the point
+it changes. Individual config publication remains atomic, but this policy does
+not claim full multi-process serialization across network checks, files, and OS
+credential services.
+
+**Rejected:** Trusting the startup snapshot indefinitely, automatically sending
+the first prompt after an active-profile refresh, last-writer-wins target edits,
+and silently reusing a stored bearer key at a different origin.

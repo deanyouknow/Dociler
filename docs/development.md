@@ -9,8 +9,10 @@ memory-only sessions, and a credential-store interface. M3 adds verified remote
 profiles, OS keychain integration, streamed one-shot chat, a provider-independent
 generation controller, cancellable HTTP, and an initial interactive multi-turn
 terminal surface with remote onboarding, confirmed profile removal, and verified
-credential rotation. Local onboarding, inference, document processing, and
-serving remain future work. See
+credential rotation. It also includes config-backed refresh, saved-profile
+health checks, verified endpoint/model editing, and visible reconnect state.
+Local onboarding, inference, document processing, and serving remain future
+work. See
 [Configuration](configuration.md) and
 [Remote providers](remote-providers.md) for commands and boundaries.
 
@@ -48,6 +50,8 @@ cargo run --locked -- doctor
 cargo run --locked -- config paths
 cargo run --locked -- config show
 cargo run --locked -- connect list
+cargo run --locked -- connect check PROFILE
+cargo run --locked -- connect edit PROFILE URL MODEL
 cargo run --locked -- chat
 cargo build --release --locked
 ```
@@ -70,7 +74,10 @@ configuration, and output errors with 1. Broken output pipes exit quietly.
 `connect add` also saves a verified non-secret profile; when a key is supplied,
 it writes the key only to the OS credential service. `connect key`, confirmed
 `connect key-clear`, and confirmed `connect remove` provide scriptable profile
-lifecycle operations; secrets still enter only through `DOCILER_API_KEY`.
+lifecycle operations; `connect check` re-verifies saved state, and `connect edit`
+verifies endpoint/model changes before commit. Authenticated cross-origin edits
+also require `--confirm-credential-destination`. Secrets still enter only through
+`DOCILER_API_KEY` or the native credential manager.
 
 ## Workspace boundaries
 
@@ -110,8 +117,9 @@ Windows x86-64. Runner labels are selected from the
 Hosted runner checks do not certify minimum OS versions or 8/16 GB hardware.
 Linux native jobs also drive the built executable through a real pseudo-terminal
 against an ephemeral loopback mock provider, covering first-run onboarding,
-multi-turn streaming, cancellation disconnect, resize survival, and terminal
-cleanup. The harness sends no public requests and uses an isolated config path.
+multi-turn streaming, saved-profile health checking, cancellation disconnect,
+resize survival, and terminal cleanup. The harness sends no public requests and
+uses an isolated config path.
 
 There is no publishing workflow yet. Dependency vulnerability/license auditing,
 release packages, checksums, signed manifests, SBOMs, provenance, and installer

@@ -30,10 +30,11 @@ During the M3 transition, the working TUI supplies a scrollable plain-text
 transcript, bounded multiline composer, memory-only multi-turn history, visible
 workspace/profile/privacy state, streaming output, cooperative cancellation,
 and the core `/help`, `/status`, `/connect`, `/clear`, and `/exit` commands.
-`/connect` can list/switch/add/remove profiles and open a key-update flow. Enter
-sends, Alt+Enter inserts a newline, PageUp/PageDown scroll, and Escape cancels
-active generation or clears idle input. Ctrl+C cancels while busy and exits
-while idle.
+`/connect` can list, refresh, switch, add, check, edit, remove, and update keys
+for profiles. The header shows unchecked, checking, ready, or attention state;
+`/status` gives a concrete check/edit recovery command. Enter sends, Alt+Enter
+inserts a newline, PageUp/PageDown scroll, and Escape cancels active generation
+or clears idle input. Ctrl+C cancels while busy and exits while idle.
 
 The real Linux executable is exercised through a pseudo-terminal against a
 loopback mock provider for first-run setup, contextual streaming, cancellation,
@@ -47,6 +48,17 @@ minimal generation pass; the key can be persisted only in the OS credential
 store. `/back` revisits the previous field after a validation or verification
 failure, while `/cancel` or Escape stops setup. Escape requests cancellation
 before configuration commit when verification is active.
+
+`/connect refresh` reloads profiles saved by another process. Other profile
+commands refresh automatically, as does every prompt before transmission.
+Unrelated profile changes preserve context. If the active endpoint, model, or
+credential policy changed, Dociler clears model context and refuses that first
+prompt so the user can review `/status` and deliberately submit it again.
+`/connect check NAME` verifies the saved endpoint, native credential, model
+listing, and minimal generation without changing settings. `/connect edit NAME`
+prefills endpoint/model fields and verifies the candidate before committing it.
+An authenticated edit to a different origin displays the normalized destination
+and requires typed `/confirm` before Dociler retrieves or sends the existing key.
 
 It does not yet provide the local/backend choice, hardware summary, Markdown
 rendering, command/file completion, document discovery, or context metering.
@@ -111,7 +123,7 @@ the selected set and estimated processing work.
 | --- | --- |
 | `/help` | Show task examples, keys, commands, and privacy explanations. |
 | `/model` | Inspect, download, switch, or unload local profiles. |
-| `/connect` | List/switch profiles; `add` verifies a new one, `remove NAME` requires exact repetition, and `key NAME` verifies a replacement or keyless access. Endpoint/model editing remains future behavior. |
+| `/connect` | List/switch profiles; `refresh` reloads disk state; `add`, `check NAME`, and `edit NAME` verify connectivity; `remove NAME` requires exact repetition; `key NAME` verifies a replacement or keyless access. |
 | `/files` | Browse supported workspace documents and extraction status. |
 | `/status` | Show backend health, memory/context, permissions, and server state. |
 | `/clear` | Clear the in-memory transcript and extracted context after confirmation. |
@@ -122,9 +134,9 @@ the selected set and estimated processing work.
 | `/update` | Check signed metadata and install only after confirmation. |
 | `/exit` | Exit, asking what to do with a running LAN service. |
 
-Only `/help`, `/status`, `/connect [NAME|add|remove NAME|key NAME]`, confirmed
-`/clear`, and `/exit` are active in the current M3 terminal surface. The
-remaining rows are the approved target contract.
+Only `/help`, `/status`, `/connect [NAME|add|refresh|check NAME|edit NAME|remove
+NAME|key NAME]`, confirmed `/clear`, and `/exit` are active in the current M3
+terminal surface. The remaining rows are the approved target contract.
 
 ## Write experience
 

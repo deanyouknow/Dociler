@@ -19,12 +19,26 @@ Verify without saving:
 dociler connect verify https://models.example.com/v1 upstream-model
 ```
 
-Save a verified profile:
+Save or re-check a verified profile:
 
 ```sh
 dociler connect add office https://models.example.com/v1 upstream-model
 dociler connect list
+dociler connect check office
 ```
+
+Verify and update an existing profile's endpoint or model while preserving its
+credential policy:
+
+```sh
+dociler connect edit office https://new-models.example.com/v1 new-model
+```
+
+When an authenticated profile moves to a different origin, the command stops
+before retrieving or sending the stored key. After reviewing the normalized
+destination, repeat it with `--confirm-credential-destination`. Same-origin
+path normalization, model-only edits, and keyless profiles do not need that
+flag.
 
 Rotate or remove credentials and profiles:
 
@@ -65,11 +79,13 @@ dociler chat office
 
 If a profile name is omitted, Dociler selects the first saved profile. Use
 `/connect` to list profiles, `/connect NAME` to switch, or `/connect add` for the
-four-step profile wizard. `/connect remove NAME` requires repeating the exact
-command, and `/connect key NAME` opens a masked field where an empty value means
-verified keyless access. Switching, removing the active profile, or updating its
-credential resets model context. `/status`, `/help`,
-the two-step `/clear`, and `/exit` are also active.
+four-step profile wizard. `/connect refresh` reloads saved state; `/connect check
+NAME` performs a non-mutating health check; and `/connect edit NAME` opens a
+prefilled verified endpoint/model flow. `/connect remove NAME` requires repeating
+the exact command, and `/connect key NAME` opens a masked field where an empty
+value means verified keyless access. Switching, removing, or changing the active
+profile resets model context. `/status` shows connection state and a recovery
+action. `/help`, the two-step `/clear`, and `/exit` are also active.
 History and rendered transcript remain only in process memory. A redirected
 bare invocation prints help, and `chat` refuses to start without terminal input
 and output, so scripts do not receive terminal control sequences.
@@ -87,9 +103,20 @@ hidden key input is always discarded after an attempt. Duplicate names fail
 without replacement. Removal writes the non-secret configuration first and then
 deletes any native credential, reporting an actionable warning if cleanup fails.
 Credential rotation verifies the candidate policy before mutation and rolls a
-new key back if the configuration marker cannot be saved. Upstream endpoint/model
-editing, automatic reconnect state, and refreshed concurrent-process state are
-still pending.
+new key back if the configuration marker cannot be saved. Profile checks and
+edits reload current settings. Long-running install/rotation/edit operations
+reload again after verification, preserve unrelated profile changes, and reject
+an edit or rotation if its target changed concurrently. This compare-before-save
+policy prevents stale verified state from deliberately overwriting the target;
+the config filesystem still has no cross-process transaction spanning every
+possible read/save race.
+
+The TUI refreshes profile state before commands and prompt transmission.
+Unrelated changes preserve the active conversation. A changed active profile
+resets context and blocks the pending prompt until the user reviews and submits
+again, avoiding accidental disclosure to a newly selected destination. An
+authenticated edit to a new origin pauses at a normalized-destination screen
+and requires typed `/confirm` before the existing key is retrieved or sent.
 
 ## Endpoint policy
 

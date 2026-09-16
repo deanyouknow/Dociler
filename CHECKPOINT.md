@@ -1,16 +1,17 @@
 # Project Checkpoint
 
-Last updated: 2026-09-16T00:44:16Z
+Last updated: 2026-09-16T01:13:48Z
 
 ## Current status
 
-**Status:** M3 remote onboarding, text chat, profile lifecycle, cancellation,
-and Linux pseudo-terminal flow locally implemented and verified; profile refresh
-and cross-platform hardening pending.
+**Status:** M3 remote onboarding, text chat, profile lifecycle, concurrent
+profile refresh, verified editing/checks, cancellation, and Linux
+pseudo-terminal flow locally implemented and verified; native cross-platform
+validation pending.
 
 **Active milestone:** M3 — Terminal onboarding and remote text chat (primary
 remote flow, core profile lifecycle, and Linux terminal integration complete
-locally; profile refresh and cross-platform hardening pending).
+locally; cross-platform credential/terminal validation pending).
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
 `dociler` executable with help, version, workspace/platform diagnostics, config
@@ -26,10 +27,12 @@ cancellation. A profile-free launch and `/connect add` now provide verified
 remote setup with masked optional key entry and native-only credential storage.
 Profiles can now be removed after explicit confirmation, and keys can be
 verified, rotated, or cleared without entering configuration or command-line
-arguments. It has no local-backend onboarding, endpoint/model profile editing,
-document parsing, local model/runtime integration, settings/grant update UI, or
-Dociler API yet. The five-platform CI workflow is defined; its hosted result
-could not be retrieved from this environment.
+arguments. Saved profiles can be refreshed, re-checked, and edited with
+verification, concurrent-target conflict detection, visible connection state,
+and explicit consent before an existing key is sent to a changed origin. It has
+no local-backend onboarding, document parsing, local model/runtime integration,
+settings/grant update UI, or Dociler API yet. The five-platform CI workflow is
+defined; its hosted result could not be retrieved from this environment.
 
 ## Completed
 
@@ -111,20 +114,30 @@ could not be retrieved from this environment.
   streaming, stalled-response cancellation/disconnect, resize survival,
   alternate-screen restoration, clean exit, and absence of conversation data in
   saved configuration. Linux native CI jobs run it against the release binary.
+- Added `connect check NAME` and verified `connect edit NAME URL MODEL` commands,
+  plus TUI `/connect refresh`, `/connect check NAME`, and prefilled `/connect edit
+  NAME` flows with visible unchecked/checking/ready/attention state.
+- Added destination-bound credential protection: authenticated cross-origin
+  edits stop before key retrieval/network access until a CLI flag or typed TUI
+  confirmation explicitly approves the normalized destination.
+- Reloaded settings after long profile verification, preserved unrelated
+  concurrent changes, rejected stale target edits/rotations, refreshed TUI state
+  before commands/prompts, and blocked prompt transmission after an active
+  profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
 
 ## Work in progress
 
-None for this bounded progress unit. M3 still has concurrent-state/reconnect and
-cross-platform hardening work. M1–M3 hosted/native execution remains unverified
-outside this Linux x86-64 environment.
+No local code unit is currently in progress. M1–M3 hosted/native execution
+remains unverified outside this Linux x86-64 environment.
 
 ## Next recommended task
 
-Continue M3 with refresh after concurrent profile changes, actionable reconnect
-status, and verified endpoint/model editing. Validate real Keychain/Credential
-Manager/Secret Service behavior and hosted platform CI when access is available. Preserve
-non-interactive automation. Do not add documents or local model downloads until
-this text-only terminal path is stable. Implementation remains authorized.
+Complete M3 platform hardening by validating real macOS Keychain, Windows
+Credential Manager, and Linux Secret Service behavior and reviewing hosted
+five-target CI when those environments are available. The next locally bounded
+implementation task is the M4 read-only hardware inventory/admission foundation;
+it must not download models or runtimes yet. Preserve non-interactive automation.
+Implementation remains authorized.
 
 ## Blockers
 
@@ -181,8 +194,40 @@ rustup setup described in `docs/development.md` on other machines.
 - ADR-015: removal/key clearing commits non-secret configuration before native
   key cleanup and reports orphan warnings; key additions verify first and roll
   back the native write if marker publication fails.
+- ADR-016: refresh profile state before disclosure, reset context and require
+  prompt resubmission after an active-profile change, compare verified target
+  state before mutation, and require explicit consent before reusing a stored
+  key at a different origin.
 
 ## Verification
+
+### M3 profile refresh, edit, and reconnect integration — 2026-09-16
+
+Local checks used isolated Rust 1.85.1 tooling. Mock providers bound only
+ephemeral `127.0.0.1` ports and made no public-provider requests.
+
+- **passed:** `cargo fmt --all -- --check` and `cargo clippy --workspace
+  --all-targets --locked --offline -- -D warnings`.
+- **passed:** `cargo test --workspace --locked --offline`: 56 tests (13 terminal,
+  11 CLI, 16 core unit, 11 foundation, 5 mock remote integration).
+- **passed:** `cargo test --workspace --release --locked --offline`: the same 56
+  tests against optimized code.
+- **passed:** concurrent unrelated-profile merge, stale-target conflict,
+  credential preservation, pre-key-access cross-origin consent, TUI refresh and
+  context reset, blocked prompt disclosure, status recovery action, and
+  executable add/check/edit/remove lifecycle coverage.
+- **passed:** `cargo test --workspace --doc --locked --offline`: no doctests yet;
+  `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked --offline`;
+  `cargo build --workspace --release --locked --offline`.
+- **passed:** debug and release `scripts/test_tui_pty.py` runs, including saved
+  profile health checking; release help/doctor smoke; Python syntax parse;
+  `python3 scripts/check_docs.py` (16 Markdown files, 27 relative links); and
+  `git diff --check`.
+- **not run:** real Keychain/Credential Manager/Secret Service mutation, hosted
+  macOS/Windows/Linux ARM64 CI, live providers, and full adversarial
+  multi-process stress/locking tests.
+- **not run:** local models, documents, LAN API, constrained-memory/model
+  qualification, installers, audits, supply chain, and later release gates.
 
 ### M3 mock-provider pseudo-terminal integration — 2026-09-16
 
@@ -428,3 +473,5 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-16T00:36:49Z | Codex `/root` | Complete M3 profile lifecycle and onboarding retry unit | Added shared safe removal/key rotation, CLI confirmations, TUI exact-repeat removal and masked credential update, setup back/cancel/retry, rollback/orphan handling, tests, docs, and ADR-015; resolves 00:17 entry | Core config/profile/remote services, CLI/TUI/tests, README, architecture/CLI/configuration/development/remote/privacy/testing/decision docs, CHECKPOINT.md | passed: fmt, strict Clippy, 48 debug and optimized tests, doctests/docs, release build/smoke, Markdown and diff checks; failed then resolved: temporary toolchain lost on restart; not run: mock PTY chat/resize, live keychains/providers, hosted platforms, later gates | COMPLETE; M3 REMAINS ACTIVE | Add mock-backed pseudo-terminal onboarding/chat/cancel/resize and terminal cleanup; then concurrent refresh/reconnect/editing and platform validation |
 | 2026-09-16T00:38:50Z | Codex `/root` | Continue M3 pseudo-terminal integration | Add a loopback mock-provider PTY harness covering onboarding, streamed multi-turn chat, stalled-request cancellation, resize, terminal restoration, and CI wiring | PTY test script, CI, testing/development docs, CHECKPOINT.md | not run: PTY integration pending | IN PROGRESS | Complete deterministic Linux PTY coverage without live providers, real credentials, documents, or model downloads |
 | 2026-09-16T00:44:16Z | Codex `/root` | Complete M3 mock-provider pseudo-terminal integration | Added deterministic real-PTY onboarding, contextual chat, stalled-stream cancel/disconnect, resize and alternate-screen cleanup coverage plus Linux native CI execution; resolves 00:38 entry | `scripts/test_tui_pty.py`, CI workflow, CLI/development/testing docs, CHECKPOINT.md | passed: debug and release PTY runs, Python parse, static CI YAML, Markdown and diff checks; failed then resolved: cursor-delta text waits replaced by semantic provider/config synchronization; not run: hosted/non-Linux/live provider/keychain/later gates | COMPLETE; M3 REMAINS ACTIVE | Add concurrent profile refresh, reconnect status, verified endpoint/model editing, then native credential/platform validation |
+| 2026-09-16T00:46:34Z | Codex `/root` | Continue M3 profile refresh/edit/reconnect integration | Add config-backed profile refresh after concurrent changes, verified endpoint/model editing with credential preservation, actionable health/reconnect status, CLI/TUI flows, tests, docs, and handoff | Core profile/config services, CLI/TUI/tests, README/docs, CHECKPOINT.md | not run: refresh/edit/reconnect checks pending | IN PROGRESS | Complete this bounded M3 unit without documents, local models, LAN serving, or persisted transcripts |
+| 2026-09-16T01:13:48Z | Codex `/root` | Complete M3 profile refresh/edit/reconnect integration | Added config-backed refresh before commands/prompts, verified profile checks/edits, visible connection recovery, concurrent-change merge/conflict handling, cross-origin credential consent, non-disclosure guard, tests, docs, and ADR-016; resolves 00:46 entry | Core profile/config/remote services, CLI/TUI/tests, PTY harness, README, architecture/CLI/configuration/development/remote/privacy/testing/decision docs, CHECKPOINT.md | passed: fmt, strict Clippy, 56 debug and optimized tests, doctests/docs, release build/help/doctor, debug/release PTY, Markdown/Python/diff checks; not run: live providers/keychains, hosted/non-Linux platforms, later gates | COMPLETE; M3 LOCAL TEXT FLOW COMPLETE | Validate native credential/platform behavior when available; otherwise begin M4 read-only hardware inventory/admission without downloads |

@@ -8,8 +8,8 @@ use dociler_core::credentials::{CredentialError, CredentialStore, OsCredentialSt
 use dociler_core::diagnostics::Diagnostics;
 use dociler_core::paths::AppPaths;
 use dociler_core::profiles::{
-    ProfileInstallError, ProfileMutationError, install_remote_profile, remove_remote_profile,
-    rotate_remote_credential,
+    ProfileInstallError, ProfileMutationError, check_remote_profile, edit_remote_profile,
+    install_remote_profile, remove_remote_profile, rotate_remote_credential,
 };
 use dociler_core::remote::{RemoteClient, RemoteError, RemoteProfile};
 use dociler_core::session::{Role, Session};
@@ -32,6 +32,11 @@ Commands:
                 Verify an endpoint without saving it
   connect add NAME URL MODEL
                 Verify and save a new profile; reads optional DOCILER_API_KEY
+  connect check NAME
+                Re-verify a saved profile and its native credential
+  connect edit NAME URL MODEL
+                Verify and update endpoint/model; add --confirm-credential-destination
+                before sending an existing key to a changed origin
   connect remove NAME --confirm
                 Remove a profile and its OS-stored credential
   connect key NAME
@@ -70,6 +75,15 @@ enum Command {
     ConnectRemove {
         name: String,
         confirmed: bool,
+    },
+    ConnectCheck {
+        name: String,
+    },
+    ConnectEdit {
+        name: String,
+        url: String,
+        model: String,
+        confirmed_destination: bool,
     },
     ConnectKey {
         name: String,
@@ -111,6 +125,31 @@ fn parse(args: &[OsString]) -> Option<Command> {
                 name: name.to_str()?.to_owned(),
                 url: url.to_str()?.to_owned(),
                 model: model.to_str()?.to_owned(),
+            })
+        }
+        [command, action, name] if command == "connect" && action == "check" => {
+            Some(Command::ConnectCheck {
+                name: name.to_str()?.to_owned(),
+            })
+        }
+        [command, action, name, url, model] if command == "connect" && action == "edit" => {
+            Some(Command::ConnectEdit {
+                name: name.to_str()?.to_owned(),
+                url: url.to_str()?.to_owned(),
+                model: model.to_str()?.to_owned(),
+                confirmed_destination: false,
+            })
+        }
+        [command, action, name, url, model, flag]
+            if command == "connect"
+                && action == "edit"
+                && flag == "--confirm-credential-destination" =>
+        {
+            Some(Command::ConnectEdit {
+                name: name.to_str()?.to_owned(),
+                url: url.to_str()?.to_owned(),
+                model: model.to_str()?.to_owned(),
+                confirmed_destination: true,
             })
         }
         [command, action, name] if command == "connect" && action == "remove" => {
@@ -168,6 +207,7 @@ enum CommandError {
     Credential(CredentialError),
     Input,
     Usage(&'static str),
+    Conflict,
     Remote(RemoteError),
     Terminal,
 }
@@ -268,6 +308,10 @@ fn map_profile_mutation(error: ProfileMutationError) -> CommandError {
         ProfileMutationError::Remote(error) => CommandError::Remote(error),
         ProfileMutationError::Cancelled => CommandError::Remote(RemoteError::Cancelled),
         ProfileMutationError::NotFound => CommandError::Input,
+        ProfileMutationError::Conflict => CommandError::Conflict,
+        ProfileMutationError::DestinationConsentRequired => CommandError::Usage(
+            "editing an authenticated profile to a new origin requires --confirm-credential-destination; no key was sent and nothing changed",
+        ),
     }
 }
 
@@ -378,6 +422,34 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             writeln!(output, "Endpoint: {}", profile.base_url())?;
             writeln!(output, "Model: {}", profile.model())?;
             writeln!(output, "Use: dociler run {}", profile.name())?;
+        }
+        Command::ConnectCheck { name } => {
+            let profile = check_remote_profile(&paths()?, &name, &CancellationToken::new())
+                .map_err(map_profile_mutation)?;
+            writeln!(output, "Connection ready for '{}'.", profile.name())?;
+            writeln!(output, "Endpoint: {}", profile.base_url())?;
+            writeln!(output, "Model: {}", profile.model())?;
+            writeln!(output, "Nothing changed.")?;
+        }
+        Command::ConnectEdit {
+            name,
+            url,
+            model,
+            confirmed_destination,
+        } => {
+            let outcome = edit_remote_profile(
+                &paths()?,
+                &name,
+                &url,
+                &model,
+                confirmed_destination,
+                &CancellationToken::new(),
+            )
+            .map_err(map_profile_mutation)?;
+            writeln!(output, "Verified and updated profile '{}'.", name)?;
+            writeln!(output, "Endpoint: {}", outcome.profile().base_url())?;
+            writeln!(output, "Model: {}", outcome.profile().model())?;
+            writeln!(output, "The credential policy was preserved.")?;
         }
         Command::ConnectRemove { name, confirmed } => {
             if !confirmed {
@@ -545,6 +617,9 @@ fn main() -> ExitCode {
                     "invalid input; use 'dociler --help'. Prompts for 'run' must be non-empty UTF-8 on stdin and at most 64 KiB."
                 }
                 CommandError::Usage(message) => message,
+                CommandError::Conflict => {
+                    "profile changed in another process; nothing overwritten. Refresh and retry."
+                }
                 CommandError::Remote(error) => match error {
                     RemoteError::InvalidProfile => "invalid remote profile name, URL, or model.",
                     RemoteError::UnsafeEndpoint => {
