@@ -70,9 +70,11 @@ available through [Remote providers](remote-providers.md).
 
 ## First-run wizard
 
-The remote half of this wizard is implemented in M3. Until M4 implements local
-hardware admission and assets, a profile-free launch explains that local models
-are pending and proceeds directly to remote setup; Escape cancels without saving.
+The remote half of this wizard is implemented in M3. M4 now provides read-only
+hardware/preflight reporting through the non-interactive `model status` command,
+but the TUI local choice, runtime probe, and asset management remain pending. A
+profile-free launch therefore still proceeds directly to remote setup; Escape
+cancels without saving.
 
 ### Backend choice
 
@@ -135,8 +137,10 @@ the selected set and estimated processing work.
 | `/exit` | Exit, asking what to do with a running LAN service. |
 
 Only `/help`, `/status`, `/connect [NAME|add|refresh|check NAME|edit NAME|remove
-NAME|key NAME]`, confirmed `/clear`, and `/exit` are active in the current M3
-terminal surface. The remaining rows are the approved target contract.
+NAME|key NAME]`, confirmed `/clear`, and `/exit` are active in the current
+terminal surface. `dociler model status` is available outside the TUI; the
+interactive `/model` workflow and the remaining rows are the approved target
+contract.
 
 ## Write experience
 

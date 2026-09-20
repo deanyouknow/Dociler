@@ -8,6 +8,7 @@ pub mod chat;
 pub mod config;
 pub mod credentials;
 pub mod diagnostics;
+pub mod hardware;
 pub mod paths;
 pub mod profiles;
 pub mod remote;

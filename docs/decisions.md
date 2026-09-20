@@ -223,3 +223,25 @@ credential services.
 **Rejected:** Trusting the startup snapshot indefinitely, automatically sending
 the first prompt after an active-profile refresh, last-writer-wins target edits,
 and silently reusing a stored bearer key at a different origin.
+
+## ADR-017: Fail-closed hardware preflight before runtime admission
+
+**Decision:** Collect a local, ephemeral RAM/CPU/disk snapshot through pinned
+`sysinfo` 0.33.1 system/disk features, without enumerating processes. Apply a
+lower Linux cgroup memory limit when present. Classify Lite and Pro as blocked,
+experimental, inventory-incomplete, or ready for a required runtime probe; never
+call a static preflight final admission. Use decimal 6/8/16 GB hardware classes,
+the 5.5/11.5 GiB qualification working-set floors, and provisional model-size
+plus 2 GiB disk floors. Keep accelerator candidates unselected until a packaged
+runtime load/generation probe succeeds.
+
+**Why:** Hardware marketing classes and binary memory budgets use different
+units, and container limits can be lower than host RAM. Explicit states avoid
+offering Pro merely because its file fits or promising acceleration from a
+driver/library hint. A small shared service gives doctor, future onboarding, and
+the API one policy without persisting a hardware fingerprint.
+
+**Rejected:** Comparing 8/16 GB classes as 8/16 GiB, treating swap as available
+admission memory, enumerating processes, shelling out to platform utilities,
+selecting CUDA/Metal/Vulkan without a runtime probe, and downloading assets as a
+side effect of diagnostics.

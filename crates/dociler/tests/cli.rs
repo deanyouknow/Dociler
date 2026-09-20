@@ -189,11 +189,30 @@ fn doctor_reports_workspace_without_touching_documents() {
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains(&format!("{:?}", workspace.0.canonicalize().unwrap())));
     assert!(text.contains("read-only"));
-    assert!(text.contains("not assessed"));
+    assert!(text.contains("Hardware inventory: read-only; not persisted"));
+    assert!(text.contains("dociler-lite:"));
+    assert!(text.contains("dociler-pro:"));
+    assert!(text.contains("Preflight is not final admission"));
     assert!(!text.contains("rahasia.txt"));
     assert!(!text.contains("confidential fixture"));
     assert_eq!(fs::read(&path).unwrap(), b"confidential fixture");
     assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 1);
+}
+
+#[test]
+fn model_status_is_read_only_and_reports_both_preflight_tiers() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["model", "status"]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Memory:"));
+    assert!(text.contains("CPU:"));
+    assert!(text.contains("Asset storage:"));
+    assert!(text.contains("dociler-lite:"));
+    assert!(text.contains("dociler-pro:"));
+    assert!(text.contains("no runtime/model was downloaded or executed"));
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
 }
 
 #[test]

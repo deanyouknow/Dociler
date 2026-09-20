@@ -165,3 +165,12 @@ the existence of a workflow is not evidence that it has run. Later product and
 release gates above remain outstanding. Live-provider cancellation, blocking
 DNS/keychain interruption, and non-Linux target-platform terminal behavior are
 not yet covered.
+
+The first M4 tests use injected inventory values to cover below-6-GB rejection,
+6–8-GB experimental Lite classification, decimal 8/16 GB class boundaries,
+available-memory and disk failures, successful probe eligibility, and
+fail-closed missing data. A live smoke test asserts that inventory creates no
+target directory and leaves at least one logical CPU available. CLI integration
+coverage verifies that `model status` reports both tiers without workspace
+writes. These tests do not qualify a model, accelerator, runtime artifact, or
+constrained-memory host.

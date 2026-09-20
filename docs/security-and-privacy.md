@@ -10,6 +10,12 @@ No telemetry, crash upload, analytics, prompt logging, or remote update payload
 may contain workspace paths, hardware identifiers, document metadata, prompts,
 answers, or file contents.
 
+The M4 hardware inventory is local, read-only, and ephemeral. It reads only
+memory/CPU facts and filesystem capacity for the future OS-managed asset path;
+it does not enumerate processes, inspect workspace files, create directories,
+persist a device fingerprint, or send inventory over the network. Future update
+or asset requests must not attach this inventory.
+
 ## Data classification and retention
 
 | Data | Default location | Retention |

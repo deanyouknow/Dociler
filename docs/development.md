@@ -11,14 +11,16 @@ generation controller, cancellable HTTP, and an initial interactive multi-turn
 terminal surface with remote onboarding, confirmed profile removal, and verified
 credential rotation. It also includes config-backed refresh, saved-profile
 health checks, verified endpoint/model editing, and visible reconnect state.
-Local onboarding, inference, document processing, and serving remain future
-work. See
+M4 begins with read-only RAM/CPU/disk inventory and conservative Lite/Pro
+preflight reporting. Local onboarding, downloads, inference, document processing,
+and serving remain future work. See
 [Configuration](configuration.md) and
 [Remote providers](remote-providers.md) for commands and boundaries.
 
 Direct dependencies are pinned: directories 6.0.0, Serde 1.0.219, serde_json
 1.0.140, tempfile 3.19.1, zeroize 1.8.1, URL 2.5.4, Reqwest 0.12.23,
-keyring 3.6.3, Ratatui 0.29.0, Crossterm 0.28.1, and Unicode Width 0.2.0.
+keyring 3.6.3, Ratatui 0.29.0, Crossterm 0.28.1, Unicode Width 0.2.0, and
+sysinfo 0.33.1 with only system/disk features.
 Futures Util 0.3.34 and Tokio 1.53.1 support cancellable remote I/O without a
 process-global runtime.
 The lockfile pins transitives. These
@@ -49,6 +51,7 @@ cargo run --locked -- --version
 cargo run --locked -- doctor
 cargo run --locked -- config paths
 cargo run --locked -- config show
+cargo run --locked -- model status
 cargo run --locked -- connect list
 cargo run --locked -- connect check PROFILE
 cargo run --locked -- connect edit PROFILE URL MODEL
@@ -65,8 +68,9 @@ prompt supplied on standard input.
 
 `doctor` reports a canonical workspace path, OS, architecture, and current
 development capabilities. It reads directory metadata and validates saved
-settings if present. It does not inspect document contents, start services,
-persist settings, or test memory/GPU readiness.
+settings if present. It also runs the read-only hardware/preflight snapshot. It
+does not inspect document contents, start services, persist settings, probe an
+accelerator/runtime, or perform final model admission.
 Its exit status means the diagnostic command completed, not that inference is
 available. Help/version exit with 0; invalid arguments with 2; diagnostic,
 configuration, and output errors with 1. Broken output pipes exit quietly.
@@ -78,6 +82,11 @@ lifecycle operations; `connect check` re-verifies saved state, and `connect edit
 verifies endpoint/model changes before commit. Authenticated cross-origin edits
 also require `--confirm-credential-destination`. Secrets still enter only through
 `DOCILER_API_KEY` or the native credential manager.
+
+`model status` and the hardware section of `doctor` are read-only snapshots.
+They do not create the model/runtime directories, download assets, select an
+accelerator, or certify a model. A positive tier result means only that the
+future runtime load/generation probe may be attempted.
 
 ## Workspace boundaries
 

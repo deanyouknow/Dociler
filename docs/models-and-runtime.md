@@ -82,11 +82,41 @@ Backend preference:
 Do not select a backend solely because a driver/library is present. Run a short
 load and generation probe before persisting it as the preferred backend.
 
+The first M4 foundation implements a read-only subset through `dociler model
+status` and `dociler doctor`. It reports host or lower Linux cgroup RAM limits,
+currently available memory, logical CPU availability, physical cores when the
+OS reports them, relevant runtime CPU instruction flags, the free filesystem
+space for Dociler's future asset directory, and a thread recommendation that
+leaves one logical CPU responsive where possible. Inspection does not enumerate
+processes, create the asset directory, persist hardware data, or make a network
+request.
+
+The implementation pins `sysinfo` 0.33.1 with only its system and disk features.
+On macOS it reports Metal as an unverified candidate. CUDA and Vulkan discovery
+remain unimplemented, and no accelerator becomes selected until a packaged
+runtime load/generation probe passes.
+
 ## Admission and runtime configuration
 
 Before load, account for model mapping/residency, runtime allocations, context
 state, batch buffers, extraction/UI reserve, current available memory, and GPU
 offload duplication. Refuse or reduce context before relying on swap.
+
+The current preflight is deliberately conservative and is not final admission:
+
+- Hardware RAM classes use decimal manufacturer units: Lite is supported at
+  8 GB and experimental from 6 GB to below 8 GB; Pro requires 16 GB.
+- Current available-memory floors use the qualification RSS limits: 5.5 GiB for
+  Lite and 11.5 GiB for Pro. Falling below a floor recommends closing workloads
+  or using Remote mode rather than relying on swap.
+- Provisional free-disk floors are the documented approximate model size plus a
+  2 GiB runtime/staging reserve: 5.16 GB for Lite and 8.32 GB for Pro. Exact
+  signed-manifest byte sizes will replace these planning floors before download.
+- A positive result is only “ready for runtime probe.” It does not persist a
+  backend choice or claim that memory, acceleration, model quality, or the
+  packaged runtime has passed release qualification.
+- Missing memory or disk inventory fails closed. Below 6 GB total RAM, local
+  mode remains unsupported.
 
 Defaults:
 

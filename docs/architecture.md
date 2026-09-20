@@ -192,6 +192,15 @@ ready, or attention, with `/connect check NAME` and `/connect edit NAME` recover
 actions. Local onboarding, skills, documents, and local orchestration are still
 future layers.
 
+M4 begins with a separate read-only `hardware` service in `dociler-core`. It
+collects memory, CPU, instruction, and asset-filesystem facts without process
+enumeration or persistence, applies lower Linux cgroup limits when present, and
+maps one immutable snapshot to explicit Lite/Pro preflight states. CLI rendering
+is kept outside the service so future onboarding and API consumers share the
+same admission decisions. Passing means only that a later packaged-runtime probe
+may proceed; asset manifests, downloads, accelerator discovery/selection,
+`llama-server` lifecycle, and local inference are not implemented in this unit.
+
 ## Failure containment
 
 - Parser crash/timeout affects only the worker and produces a per-file error.

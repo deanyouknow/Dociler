@@ -10,8 +10,10 @@ LLM or a user-configured OpenAI-compatible API.
 > one-shot text chat are available. An initial memory-only, multi-turn terminal
 > interface, remote-profile onboarding, refresh and connection checks, verified
 > endpoint/model editing, confirmed profile removal, and verified key rotation
-> are also available. Local backend onboarding, local inference, and document
-> analysis are not implemented yet.
+> are also available. Read-only RAM/CPU/disk inventory and conservative Lite/Pro
+> preflight reporting are available through `model status`. Local model/runtime
+> download and execution, local backend onboarding, and document analysis are
+> not implemented yet.
 
 The first release is scoped to word-processing documents: Markdown (`.md`),
 PDF (`.pdf`), modern and legacy Word (`.docx`, `.doc`), Rich Text Format
@@ -49,6 +51,7 @@ cargo run --locked -- --help
 cargo run --locked -- doctor
 cargo run --locked -- config paths
 cargo run --locked -- config show
+cargo run --locked -- model status
 cargo run --locked -- connect list
 cargo run --locked -- connect check PROFILE
 cargo run --locked -- connect edit PROFILE URL MODEL

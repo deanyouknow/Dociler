@@ -1,17 +1,16 @@
 # Project Checkpoint
 
-Last updated: 2026-09-16T01:13:48Z
+Last updated: 2026-09-20T13:38:43Z
 
 ## Current status
 
-**Status:** M3 remote onboarding, text chat, profile lifecycle, concurrent
-profile refresh, verified editing/checks, cancellation, and Linux
-pseudo-terminal flow locally implemented and verified; native cross-platform
-validation pending.
+**Status:** M3 remote text flow and the first M4 read-only hardware/preflight
+foundation are locally implemented and verified; native cross-platform
+validation and local asset/runtime integration remain pending.
 
-**Active milestone:** M3 — Terminal onboarding and remote text chat (primary
-remote flow, core profile lifecycle, and Linux terminal integration complete
-locally; cross-platform credential/terminal validation pending).
+**Active milestone:** M4 — Hardware admission, verified local asset management,
+and runtime integration (read-only inventory/preflight complete locally; asset
+manifests, cache verification, downloads, runtime probe, and inference pending).
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
 `dociler` executable with help, version, workspace/platform diagnostics, config
@@ -123,21 +122,30 @@ defined; its hosted result could not be retrieved from this environment.
 - Reloaded settings after long profile verification, preserved unrelated
   concurrent changes, rejected stale target edits/rotations, refreshed TUI state
   before commands/prompts, and blocked prompt transmission after an active
-  profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
+profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
+- Added a process-enumeration-free hardware service with host/lower-cgroup RAM,
+  available memory, CPU counts/features, conservative thread planning, future
+  asset-filesystem capacity, and unverified Metal candidacy on macOS.
+- Added read-only `model status` plus hardware/preflight output in `doctor`.
+  Lite/Pro results distinguish blocked, incomplete, experimental, and ready for
+  a required runtime probe without creating directories or downloading assets.
+- Added decimal 6/8/16 GB class handling, 5.5/11.5 GiB working-set floors,
+  provisional model-plus-reserve disk floors, pinned minimal-feature sysinfo
+  0.33.1, ADR-017, and eight tests, bringing the Linux suite to 64.
 
 ## Work in progress
 
-No local code unit is currently in progress. M1–M3 hosted/native execution
+No local code unit is currently in progress. M1–M4 hosted/native execution
 remains unverified outside this Linux x86-64 environment.
 
 ## Next recommended task
 
-Complete M3 platform hardening by validating real macOS Keychain, Windows
-Credential Manager, and Linux Secret Service behavior and reviewing hosted
-five-target CI when those environments are available. The next locally bounded
-implementation task is the M4 read-only hardware inventory/admission foundation;
-it must not download models or runtimes yet. Preserve non-interactive automation.
-Implementation remains authorized.
+Continue M4 with a versioned pinned-asset manifest and read-only cache
+list/verification service. Resolve exact upstream model byte sizes and per-target
+`llama.cpp` artifact URLs/checksums before enabling any network download. Keep
+download consent, resumable staging, runtime execution, and TUI local selection
+as later bounded units. Validate M3/M4 on hosted target platforms when access is
+available. Implementation remains authorized.
 
 ## Blockers
 
@@ -198,8 +206,44 @@ rustup setup described in `docs/development.md` on other machines.
   prompt resubmission after an active-profile change, compare verified target
   state before mutation, and require explicit consent before reusing a stored
   key at a different origin.
+- ADR-017: hardware inventory is local/read-only/ephemeral and process-free;
+  decimal RAM classes, binary working-set floors, lower cgroup limits, and
+  fail-closed disk/memory checks only permit a later runtime probe, never final
+  admission or automatic accelerator selection.
 
 ## Verification
+
+### M4 hardware inventory and admission foundation — 2026-09-20
+
+Local checks used isolated Rust 1.85.1 tooling. Hardware inspection made no
+network request and created no model/runtime directory. Mock-provider tests used
+only ephemeral `127.0.0.1` ports.
+
+- **passed:** `cargo fmt --all -- --check` and `cargo clippy --workspace
+  --all-targets --locked --offline -- -D warnings`.
+- **passed:** `cargo test --workspace --locked --offline`: 64 tests (13 terminal,
+  12 CLI, 23 core unit, 11 foundation, 5 mock remote integration).
+- **passed:** `cargo test --workspace --release --locked --offline`: the same 64
+  tests against optimized code.
+- **passed:** deterministic below-6-GB rejection, 6–8-GB experimental Lite,
+  decimal 8/16 GB boundary, available-memory/disk failure, ready-for-probe, and
+  fail-closed incomplete-inventory cases; live read-only inventory and CLI
+  no-workspace-write checks.
+- **passed:** `cargo test --workspace --doc --locked --offline`: no doctests yet;
+  `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked --offline`;
+  `cargo build --workspace --release --locked --offline`.
+- **passed:** release `model status`/`doctor` smoke and release PTY regression;
+  `python3 scripts/check_docs.py` (16 Markdown files, 27 relative links); and
+  `git diff --check`.
+- **failed then resolved:** temporary Rust tooling had expired and was restored
+  under `/tmp`; an initial GiB interpretation would have rejected ordinary
+  marketed 8/16 GB hosts, so class thresholds were corrected to decimal GB and
+  protected with boundary tests before final verification.
+- **not run:** native macOS/Windows/ARM64 hardware results, CUDA/Vulkan discovery,
+  packaged runtime probes, model/runtime cache or downloads, constrained-host
+  memory qualification, and hosted CI.
+- **not run:** documents, local inference, LAN API, installers, audits, supply
+  chain, and later release gates.
 
 ### M3 profile refresh, edit, and reconnect integration — 2026-09-16
 
@@ -475,3 +519,5 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-16T00:44:16Z | Codex `/root` | Complete M3 mock-provider pseudo-terminal integration | Added deterministic real-PTY onboarding, contextual chat, stalled-stream cancel/disconnect, resize and alternate-screen cleanup coverage plus Linux native CI execution; resolves 00:38 entry | `scripts/test_tui_pty.py`, CI workflow, CLI/development/testing docs, CHECKPOINT.md | passed: debug and release PTY runs, Python parse, static CI YAML, Markdown and diff checks; failed then resolved: cursor-delta text waits replaced by semantic provider/config synchronization; not run: hosted/non-Linux/live provider/keychain/later gates | COMPLETE; M3 REMAINS ACTIVE | Add concurrent profile refresh, reconnect status, verified endpoint/model editing, then native credential/platform validation |
 | 2026-09-16T00:46:34Z | Codex `/root` | Continue M3 profile refresh/edit/reconnect integration | Add config-backed profile refresh after concurrent changes, verified endpoint/model editing with credential preservation, actionable health/reconnect status, CLI/TUI flows, tests, docs, and handoff | Core profile/config services, CLI/TUI/tests, README/docs, CHECKPOINT.md | not run: refresh/edit/reconnect checks pending | IN PROGRESS | Complete this bounded M3 unit without documents, local models, LAN serving, or persisted transcripts |
 | 2026-09-16T01:13:48Z | Codex `/root` | Complete M3 profile refresh/edit/reconnect integration | Added config-backed refresh before commands/prompts, verified profile checks/edits, visible connection recovery, concurrent-change merge/conflict handling, cross-origin credential consent, non-disclosure guard, tests, docs, and ADR-016; resolves 00:46 entry | Core profile/config/remote services, CLI/TUI/tests, PTY harness, README, architecture/CLI/configuration/development/remote/privacy/testing/decision docs, CHECKPOINT.md | passed: fmt, strict Clippy, 56 debug and optimized tests, doctests/docs, release build/help/doctor, debug/release PTY, Markdown/Python/diff checks; not run: live providers/keychains, hosted/non-Linux platforms, later gates | COMPLETE; M3 LOCAL TEXT FLOW COMPLETE | Validate native credential/platform behavior when available; otherwise begin M4 read-only hardware inventory/admission without downloads |
+| 2026-09-20T13:25:33Z | Codex `/root` | Begin M4 hardware inventory/admission foundation | Add read-only cross-platform RAM/CPU/disk inventory, explicit Lite/Pro preflight outcomes, doctor/model status output, deterministic tests, docs, and handoff; clean starting tree | Cargo manifests/lock, core hardware/model admission services, CLI/tests, README/docs, CHECKPOINT.md | not run: M4 foundation checks pending | IN PROGRESS | Complete without runtime/model downloads, accelerator selection, local inference, documents, or persistent hardware data |
+| 2026-09-20T13:38:43Z | Codex `/root` | Complete M4 hardware inventory/admission foundation | Added process-free RAM/CPU/disk/cgroup inventory, conservative Lite/Pro preflight states, `model status`, enriched doctor output, dependency pin, tests, docs, and ADR-017; resolves 13:25 entry | Cargo manifests/lock, core hardware service, CLI/tests, README, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: fmt, strict Clippy, 64 debug and optimized tests, doctests/docs, release build/status/doctor, release PTY, Markdown/diff checks; failed then resolved: missing temporary toolchain and GB/GiB class mismatch; not run: native non-Linux hardware, accelerators/runtime/models/downloads/later gates | COMPLETE; M4 FOUNDATION ACTIVE | Add a pinned asset-manifest and read-only cache verification layer after resolving exact model/runtime artifact metadata; do not download or execute assets yet |

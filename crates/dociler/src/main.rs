@@ -3,9 +3,12 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
 use dociler_core::chat::CancellationToken;
-use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings};
+use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings, LocalProfile};
 use dociler_core::credentials::{CredentialError, CredentialStore, OsCredentialStore, Secret};
 use dociler_core::diagnostics::Diagnostics;
+use dociler_core::hardware::{
+    AcceleratorCandidate, HardwareInventory, MemoryScope, ModelPreflight, PreflightStatus,
+};
 use dociler_core::paths::AppPaths;
 use dociler_core::profiles::{
     ProfileInstallError, ProfileMutationError, check_remote_profile, edit_remote_profile,
@@ -27,6 +30,7 @@ Commands:
   config paths  Show OS config/model/runtime/cache locations (no writes)
   config show   Validate settings and show current-workspace policy (no writes)
   config init   Create safe default settings; never overwrite an existing file
+  model status  Inspect RAM/CPU/disk and show Lite/Pro preflight results (no writes)
   connect list  List saved remote profiles (never credentials)
   connect verify URL MODEL
                 Verify an endpoint without saving it
@@ -62,6 +66,7 @@ enum Command {
     ConfigPaths,
     ConfigShow,
     ConfigInit,
+    ModelStatus,
     ConnectList,
     ConnectVerify {
         url: String,
@@ -105,7 +110,7 @@ fn parse(args: &[OsString]) -> Option<Command> {
         [arg] if arg == "--version" || arg == "-V" => Some(Command::Version),
         [arg] if arg == "doctor" => Some(Command::Doctor),
         [command, flag]
-            if (command == "doctor" || command == "config")
+            if (command == "doctor" || command == "config" || command == "model")
                 && (flag == "--help" || flag == "-h") =>
         {
             Some(Command::Help)
@@ -113,6 +118,7 @@ fn parse(args: &[OsString]) -> Option<Command> {
         [command, action] if command == "config" && action == "paths" => Some(Command::ConfigPaths),
         [command, action] if command == "config" && action == "show" => Some(Command::ConfigShow),
         [command, action] if command == "config" && action == "init" => Some(Command::ConfigInit),
+        [command, action] if command == "model" && action == "status" => Some(Command::ModelStatus),
         [command, action] if command == "connect" && action == "list" => Some(Command::ConnectList),
         [command, action, url, model] if command == "connect" && action == "verify" => {
             Some(Command::ConnectVerify {
@@ -272,6 +278,115 @@ fn print_settings(
     )
 }
 
+fn gibibytes(bytes: u64) -> String {
+    format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
+fn optional_gibibytes(bytes: Option<u64>) -> String {
+    bytes.map(gibibytes).unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn gigabytes(bytes: u64) -> String {
+    format!("{:.2} GB", bytes as f64 / 1_000_000_000.0)
+}
+
+fn preflight_label(status: PreflightStatus) -> &'static str {
+    match status {
+        PreflightStatus::ReadyForRuntimeProbe => "ready for required runtime probe",
+        PreflightStatus::ExperimentalForRuntimeProbe => {
+            "experimental RAM class; ready for required runtime probe"
+        }
+        PreflightStatus::InsufficientTotalMemory => "unsupported total RAM; use Remote mode",
+        PreflightStatus::InsufficientAvailableMemory => {
+            "not enough memory available now; close workloads or use Remote mode"
+        }
+        PreflightStatus::InsufficientDisk => {
+            "not enough free asset-storage space; free disk or use Remote mode"
+        }
+        PreflightStatus::InventoryIncomplete => {
+            "inventory incomplete; local mode remains unavailable"
+        }
+    }
+}
+
+fn print_hardware(output: &mut impl Write, hardware: &HardwareInventory) -> io::Result<()> {
+    writeln!(output, "Hardware inventory: read-only; not persisted")?;
+    writeln!(
+        output,
+        "Memory: {} total, {} available ({})",
+        optional_gibibytes(hardware.total_memory_bytes()),
+        optional_gibibytes(hardware.available_memory_bytes()),
+        match hardware.memory_scope() {
+            MemoryScope::Host => "host",
+            MemoryScope::Cgroup => "container/cgroup limit",
+        }
+    )?;
+    writeln!(
+        output,
+        "CPU: {} logical available, {} physical; planned inference threads: {}",
+        hardware.logical_cpu_count(),
+        hardware
+            .physical_cpu_count()
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "unknown".to_owned()),
+        hardware.recommended_threads()
+    )?;
+    writeln!(
+        output,
+        "CPU features: {}",
+        if hardware.cpu_features().is_empty() {
+            "baseline/none reported".to_owned()
+        } else {
+            hardware.cpu_features().join(", ")
+        }
+    )?;
+    writeln!(
+        output,
+        "Asset storage: {} free{}",
+        optional_gibibytes(hardware.free_disk_bytes()),
+        hardware
+            .disk_mount()
+            .map(|mount| format!(" on {mount:?}"))
+            .unwrap_or_default()
+    )?;
+    writeln!(
+        output,
+        "Accelerator: {}",
+        if hardware
+            .accelerator_candidates()
+            .contains(&AcceleratorCandidate::Metal)
+        {
+            "Metal candidate; not selected until a packaged-runtime probe passes"
+        } else {
+            "no candidate reported yet; CUDA/Vulkan discovery is not implemented"
+        }
+    )?;
+    writeln!(output, "Local model preflight:")?;
+    for profile in [LocalProfile::Lite, LocalProfile::Pro] {
+        let report = ModelPreflight::evaluate(profile, hardware);
+        let requirements = report.requirements();
+        writeln!(
+            output,
+            "  {}: {}",
+            profile.alias(),
+            preflight_label(report.status())
+        )?;
+        writeln!(
+            output,
+            "    target RAM {:.0} GB class, current available floor {}, disk floor {}, context {} tokens; model download about {}",
+            requirements.supported_total_memory_bytes() as f64 / 1_000_000_000.0,
+            gibibytes(requirements.required_available_memory_bytes()),
+            gigabytes(requirements.required_free_disk_bytes()),
+            requirements.context_tokens(),
+            gigabytes(requirements.approximate_model_bytes())
+        )?;
+    }
+    writeln!(
+        output,
+        "Preflight is not final admission: no runtime/model was downloaded or executed."
+    )
+}
+
 fn environment_secret() -> Result<Option<Secret>, CommandError> {
     match std::env::var("DOCILER_API_KEY") {
         Ok(value) if value.is_empty() => Ok(None),
@@ -368,6 +483,11 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 output,
                 "All workspaces remain read-only. No models downloaded or services started."
             )?;
+        }
+        Command::ModelStatus => {
+            let app_paths = paths()?;
+            let hardware = HardwareInventory::inspect(&app_paths.models_dir());
+            print_hardware(output, &hardware)?;
         }
         Command::ConnectList => {
             let loaded = settings()?;
@@ -539,7 +659,7 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             let loaded = settings()?;
             writeln!(
                 output,
-                "Dociler {} — basic diagnostics",
+                "Dociler {} — read-only diagnostics",
                 env!("CARGO_PKG_VERSION")
             )?;
             // Debug formatting escapes terminal controls in an untrusted path.
@@ -558,7 +678,9 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 output,
                 "Document parsing and local inference: not implemented"
             )?;
-            writeln!(output, "Memory/GPU readiness: not assessed")?;
+            let app_paths = paths()?;
+            let hardware = HardwareInventory::inspect(&app_paths.models_dir());
+            print_hardware(output, &hardware)?;
             writeln!(output, "API server: not implemented (no listening ports)")?;
         }
     }
