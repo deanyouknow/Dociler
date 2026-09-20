@@ -11,9 +11,11 @@ LLM or a user-configured OpenAI-compatible API.
 > interface, remote-profile onboarding, refresh and connection checks, verified
 > endpoint/model editing, confirmed profile removal, and verified key rotation
 > are also available. Read-only RAM/CPU/disk inventory and conservative Lite/Pro
-> preflight reporting are available through `model status`. Local model/runtime
-> download and execution, local backend onboarding, and document analysis are
-> not implemented yet.
+> preflight reporting are available through `model status`. A built-in,
+> revision-pinned asset manifest and read-only cache listing/SHA-256 verification
+> are available through `model list` and `model verify`. Local model/runtime
+> download, extraction, and execution, local backend onboarding, and document
+> analysis are not implemented yet.
 
 The first release is scoped to word-processing documents: Markdown (`.md`),
 PDF (`.pdf`), modern and legacy Word (`.docx`, `.doc`), Rich Text Format
@@ -52,6 +54,8 @@ cargo run --locked -- doctor
 cargo run --locked -- config paths
 cargo run --locked -- config show
 cargo run --locked -- model status
+cargo run --locked -- model list
+cargo run --locked -- model verify dociler-lite
 cargo run --locked -- connect list
 cargo run --locked -- connect check PROFILE
 cargo run --locked -- connect edit PROFILE URL MODEL

@@ -36,12 +36,12 @@ Linux respects absolute XDG directory overrides. Model/runtime locations have
 `models` and `runtimes` subdirectories; these are reserved paths, not downloaded
 assets. No chat or document cache is written.
 
-Optional `DOCILER_CONFIG_DIR` selects an absolute configuration directory only.
-It does not relocate models/data/cache. Empty or relative values are errors;
-there is no implicit current-directory fallback. Use a dedicated user-owned
-directory outside the repository. This also permits isolated subprocess tests
-without touching the developer's real settings. There is no workspace config
-or `.env` auto-loading.
+Optional `DOCILER_CONFIG_DIR`, `DOCILER_DATA_DIR`, and `DOCILER_CACHE_DIR`
+select absolute configuration, persistent-data, and cache directories
+respectively. Empty or relative values are errors; there is no implicit
+current-directory fallback. The data/cache overrides support controlled
+automation and isolated subprocess tests; use dedicated user-owned directories
+outside the repository. There is no workspace config or `.env` auto-loading.
 
 ## Schema version 1
 

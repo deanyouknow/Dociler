@@ -13,8 +13,9 @@ consult `CHECKPOINT.md` for what is implemented and verified.
 - Build the application in Rust and use native installation by default. Docker
   distribution is deferred until after native v1 is stable.
 - Use a Dociler-managed `llama.cpp` sidecar for local inference, initially pinned
-  to v0.4.0 (`5266f24`). The sidecar must never be treated as a separately
-  installed system prerequisite.
+  to v0.4.0 / binary build `b10809`
+  (`5266f24da75dc449bd56cbed7addb9c8e4a6a73e`). The sidecar must never be
+  treated as a separately installed system prerequisite.
 - Use Qwen3.5 4B Q4_K_M for `dociler-lite` and Qwen3.5 9B Q4_K_M for
   `dociler-pro`, subject to the qualification gates in this plan.
 - License Dociler under Apache-2.0.
@@ -75,10 +76,10 @@ but installation requires explicit confirmation.
 
 The initial pinned artifacts are:
 
-| Profile | Upstream artifact | Size | SHA-256 | Active context |
+| Profile | Upstream artifact and revision | Exact size | SHA-256 | Active context |
 | --- | --- | ---: | --- | ---: |
-| `dociler-lite` | `bartowski/Qwen_Qwen3.5-4B-GGUF` / `Qwen_Qwen3.5-4B-Q4_K_M.gguf` | 3.01 GB | `13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983` | 8,192 |
-| `dociler-pro` | `bartowski/Qwen_Qwen3.5-9B-GGUF` / `Qwen_Qwen3.5-9B-Q4_K_M.gguf` | 6.17 GB | `d784ce9eda1a5a7b51e8f705a9e6310844bf4f173654d115823c775fdea56d43` | 16,384 |
+| `dociler-lite` | `bartowski/Qwen_Qwen3.5-4B-GGUF` @ `ba06320255db2dbec194dad738d066be90dabf29` / `Qwen_Qwen3.5-4B-Q4_K_M.gguf` | 3,013,027,808 bytes | `13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983` | 8,192 |
+| `dociler-pro` | `bartowski/Qwen_Qwen3.5-9B-GGUF` @ `2dcd842c59ea5eb119267064550a7a4c592b16c3` / `Qwen_Qwen3.5-9B-Q4_K_M.gguf` | 6,169,341,984 bytes | `d784ce9eda1a5a7b51e8f705a9e6310844bf4f173654d115823c775fdea56d43` | 16,384 |
 
 Do not download the vision projector in v1. Use one inference slot, automatic
 thread selection, automatic safe GPU offload, flash attention where validated,

@@ -198,8 +198,18 @@ enumeration or persistence, applies lower Linux cgroup limits when present, and
 maps one immutable snapshot to explicit Lite/Pro preflight states. CLI rendering
 is kept outside the service so future onboarding and API consumers share the
 same admission decisions. Passing means only that a later packaged-runtime probe
-may proceed; asset manifests, downloads, accelerator discovery/selection,
-`llama-server` lifecycle, and local inference are not implemented in this unit.
+may proceed.
+
+The next M4 layer adds an immutable `assets` service. It maps each public model
+alias and supported OS/architecture to a commit/tag-pinned source, exact byte
+size, SHA-256, and versioned OS-data path. Metadata inspection and full hashing
+share this service across the CLI and future onboarding. Cache walking rejects
+symlinks and non-regular components and never creates a missing directory. The
+currently opened file is hashed in bounded chunks, but future runtime execution
+must reopen/revalidate the installed object immediately before use to close the
+remaining inspection-to-execution race. Downloads, safe archive extraction,
+accelerator discovery/selection, `llama-server` lifecycle, and local inference
+are not implemented yet.
 
 ## Failure containment
 

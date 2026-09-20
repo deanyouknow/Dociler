@@ -170,6 +170,14 @@ prior policy and are covered by tests.
 - Notify about updates but require user confirmation before replacement.
 - Never execute an unverified partial download.
 
+The first asset layer embeds `dociler-assets-v1` in the executable and uses only
+immutable upstream revisions/tags. Read-only listing checks file metadata;
+explicit verification additionally streams exact-length regular files through
+SHA-256. Symlinked cache roots/components and non-regular files fail closed.
+This is not yet a downloader or execution authorization: signed external update
+metadata, partial-file handling, safe archive extraction/inventory, and
+revalidation at execution time remain required before local inference can run.
+
 ## Threat boundary
 
 v1 protects against accidental remote disclosure, casual LAN access, path

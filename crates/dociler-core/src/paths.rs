@@ -20,8 +20,12 @@ impl AppPaths {
             std::env::var_os("DOCILER_CONFIG_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| dirs.config_local_dir().to_owned()),
-            dirs.data_local_dir().to_owned(),
-            dirs.cache_dir().to_owned(),
+            std::env::var_os("DOCILER_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| dirs.data_local_dir().to_owned()),
+            std::env::var_os("DOCILER_CACHE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| dirs.cache_dir().to_owned()),
         )
     }
 

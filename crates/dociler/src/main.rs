@@ -2,6 +2,10 @@ use std::ffi::OsString;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
+use dociler_core::assets::{
+    CacheState, LLAMA_CPP_BUILD, LLAMA_CPP_COMMIT, LLAMA_CPP_RELEASE, MANIFEST_ID, MODEL_ASSETS,
+    VerificationLevel, current_runtime_asset, inspect_cached_asset,
+};
 use dociler_core::chat::CancellationToken;
 use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings, LocalProfile};
 use dociler_core::credentials::{CredentialError, CredentialStore, OsCredentialStore, Secret};
@@ -31,6 +35,9 @@ Commands:
   config show   Validate settings and show current-workspace policy (no writes)
   config init   Create safe default settings; never overwrite an existing file
   model status  Inspect RAM/CPU/disk and show Lite/Pro preflight results (no writes)
+  model list    List pinned local assets and cache presence (no writes or hashing)
+  model verify [PROFILE]
+                Verify cached model/runtime sizes and SHA-256 (no writes)
   connect list  List saved remote profiles (never credentials)
   connect verify URL MODEL
                 Verify an endpoint without saving it
@@ -67,6 +74,10 @@ enum Command {
     ConfigShow,
     ConfigInit,
     ModelStatus,
+    ModelList,
+    ModelVerify {
+        profile: Option<LocalProfile>,
+    },
     ConnectList,
     ConnectVerify {
         url: String,
@@ -119,6 +130,20 @@ fn parse(args: &[OsString]) -> Option<Command> {
         [command, action] if command == "config" && action == "show" => Some(Command::ConfigShow),
         [command, action] if command == "config" && action == "init" => Some(Command::ConfigInit),
         [command, action] if command == "model" && action == "status" => Some(Command::ModelStatus),
+        [command, action] if command == "model" && action == "list" => Some(Command::ModelList),
+        [command, action] if command == "model" && action == "verify" => {
+            Some(Command::ModelVerify { profile: None })
+        }
+        [command, action, profile] if command == "model" && action == "verify" => {
+            let profile = match profile.to_str()? {
+                "dociler-lite" => LocalProfile::Lite,
+                "dociler-pro" => LocalProfile::Pro,
+                _ => return None,
+            };
+            Some(Command::ModelVerify {
+                profile: Some(profile),
+            })
+        }
         [command, action] if command == "connect" && action == "list" => Some(Command::ConnectList),
         [command, action, url, model] if command == "connect" && action == "verify" => {
             Some(Command::ConnectVerify {
@@ -214,6 +239,7 @@ enum CommandError {
     Input,
     Usage(&'static str),
     Conflict,
+    AssetVerification,
     Remote(RemoteError),
     Terminal,
 }
@@ -387,6 +413,90 @@ fn print_hardware(output: &mut impl Write, hardware: &HardwareInventory) -> io::
     )
 }
 
+fn cache_state_label(state: &CacheState) -> String {
+    match state {
+        CacheState::Missing => "missing".to_owned(),
+        CacheState::PresentUnverified => "present; checksum not run".to_owned(),
+        CacheState::Verified => "verified".to_owned(),
+        CacheState::SizeMismatch { expected, observed } => {
+            format!("invalid size: expected {expected} bytes, observed {observed}")
+        }
+        CacheState::HashMismatch { .. } => "invalid SHA-256".to_owned(),
+        CacheState::UnsafeFileType => "unsafe path or file type".to_owned(),
+        CacheState::Unreadable(_) => "unreadable".to_owned(),
+    }
+}
+
+fn print_model_cache(
+    output: &mut impl Write,
+    app_paths: &AppPaths,
+    profile: LocalProfile,
+    level: VerificationLevel,
+) -> io::Result<bool> {
+    let model = dociler_core::assets::model_asset(profile);
+    let artifact = model.artifact();
+    let inspection = inspect_cached_asset(app_paths, artifact, level);
+    writeln!(
+        output,
+        "{}: {} {} Q4_K_M, {} bytes, cache={}",
+        profile.alias(),
+        model.base_model(),
+        model.license(),
+        artifact.byte_size(),
+        cache_state_label(inspection.state())
+    )?;
+    writeln!(
+        output,
+        "  upstream={}@{}",
+        model.repository(),
+        model.revision()
+    )?;
+    writeln!(output, "  source={}", artifact.source_url())?;
+    writeln!(output, "  sha256={}", artifact.sha256())?;
+    writeln!(output, "  file={:?}", inspection.path())?;
+    Ok(inspection.state().is_verified())
+}
+
+fn print_runtime_cache(
+    output: &mut impl Write,
+    app_paths: &AppPaths,
+    level: VerificationLevel,
+) -> io::Result<bool> {
+    let Some(runtime) = current_runtime_asset() else {
+        writeln!(
+            output,
+            "llama.cpp runtime: unsupported manifest target {}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )?;
+        return Ok(false);
+    };
+    let inspection = inspect_cached_asset(app_paths, runtime.artifact(), level);
+    writeln!(
+        output,
+        "llama.cpp runtime: {LLAMA_CPP_RELEASE}/{LLAMA_CPP_BUILD} {}-{} {}, cache={}",
+        runtime.operating_system(),
+        runtime.architecture(),
+        runtime.backend(),
+        cache_state_label(inspection.state())
+    )?;
+    writeln!(output, "  source={}", runtime.artifact().source_url())?;
+    writeln!(output, "  sha256={}", runtime.artifact().sha256())?;
+    writeln!(output, "  file={:?}", inspection.path())?;
+    Ok(inspection.state().is_verified())
+}
+
+fn print_asset_manifest_header(output: &mut impl Write) -> io::Result<()> {
+    writeln!(
+        output,
+        "Asset manifest: {MANIFEST_ID} (built into this executable)"
+    )?;
+    writeln!(
+        output,
+        "Runtime pin: llama.cpp {LLAMA_CPP_RELEASE}, build {LLAMA_CPP_BUILD}, commit {LLAMA_CPP_COMMIT}"
+    )
+}
+
 fn environment_secret() -> Result<Option<Secret>, CommandError> {
     match std::env::var("DOCILER_API_KEY") {
         Ok(value) if value.is_empty() => Ok(None),
@@ -488,6 +598,45 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             let app_paths = paths()?;
             let hardware = HardwareInventory::inspect(&app_paths.models_dir());
             print_hardware(output, &hardware)?;
+        }
+        Command::ModelList => {
+            let app_paths = paths()?;
+            print_asset_manifest_header(output)?;
+            for model in MODEL_ASSETS {
+                print_model_cache(
+                    output,
+                    &app_paths,
+                    model.profile(),
+                    VerificationLevel::MetadataOnly,
+                )?;
+            }
+            print_runtime_cache(output, &app_paths, VerificationLevel::MetadataOnly)?;
+            writeln!(
+                output,
+                "Read-only metadata inspection only; run 'dociler model verify [PROFILE]' for SHA-256 verification."
+            )?;
+        }
+        Command::ModelVerify { profile } => {
+            let app_paths = paths()?;
+            print_asset_manifest_header(output)?;
+            let profiles: &[LocalProfile] = match profile {
+                Some(LocalProfile::Lite) => &[LocalProfile::Lite],
+                Some(LocalProfile::Pro) => &[LocalProfile::Pro],
+                None => &[LocalProfile::Lite, LocalProfile::Pro],
+            };
+            let mut verified = true;
+            for profile in profiles {
+                verified &=
+                    print_model_cache(output, &app_paths, *profile, VerificationLevel::Sha256)?;
+            }
+            verified &= print_runtime_cache(output, &app_paths, VerificationLevel::Sha256)?;
+            writeln!(
+                output,
+                "Verification was read-only; no asset was changed or executed."
+            )?;
+            if !verified {
+                return Err(CommandError::AssetVerification);
+            }
         }
         Command::ConnectList => {
             let loaded = settings()?;
@@ -741,6 +890,9 @@ fn main() -> ExitCode {
                 CommandError::Usage(message) => message,
                 CommandError::Conflict => {
                     "profile changed in another process; nothing overwritten. Refresh and retry."
+                }
+                CommandError::AssetVerification => {
+                    "one or more cached assets are missing or invalid; nothing was changed."
                 }
                 CommandError::Remote(error) => match error {
                     RemoteError::InvalidProfile => "invalid remote profile name, URL, or model.",

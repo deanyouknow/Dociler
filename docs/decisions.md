@@ -245,3 +245,25 @@ the API one policy without persisting a hardware fingerprint.
 admission memory, enumerating processes, shelling out to platform utilities,
 selecting CUDA/Metal/Vulkan without a runtime probe, and downloading assets as a
 side effect of diagnostics.
+
+## ADR-018: Built-in immutable asset manifest before download support
+
+**Decision:** Compile `dociler-assets-v1` into the executable with exact model
+repository revisions and the exact llama.cpp semantic release, binary build,
+commit, per-target archive URL, byte count, and SHA-256. Keep metadata listing
+separate from explicit full-file verification. Store each artifact beneath a
+versioned model/runtime namespace, reject symlink/non-regular cache components,
+and make both operations read-only. Support only the five initial CPU/Metal
+release targets until other packages pass platform qualification.
+
+**Why:** Mutable branches, `latest`, rounded sizes, and filename-only checks are
+not adequate trust inputs for executable/model artifacts. A built-in manifest
+has the same authenticated distribution boundary as the Dociler binary and can
+be tested before any network mutation exists. Separate listing avoids hashing
+multi-gigabyte files during routine status checks, while explicit verification
+gives automation a nonzero result for missing or invalid cache state.
+
+**Rejected:** Fetching metadata from mutable upstream heads at runtime, treating
+presence/size as verified, following cache symlinks, silently repairing invalid
+files, enabling unqualified GPU bundles, or claiming the archive is executable
+before safe extraction and a load/generation probe are implemented.

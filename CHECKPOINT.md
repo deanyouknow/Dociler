@@ -1,16 +1,18 @@
 # Project Checkpoint
 
-Last updated: 2026-09-20T13:38:43Z
+Last updated: 2026-09-20T13:59:08Z
 
 ## Current status
 
-**Status:** M3 remote text flow and the first M4 read-only hardware/preflight
-foundation are locally implemented and verified; native cross-platform
-validation and local asset/runtime integration remain pending.
+**Status:** M3 remote text flow plus M4 read-only hardware/preflight and pinned
+asset/cache-verification foundations are locally implemented and verified;
+native cross-platform validation, downloads, and local runtime execution remain
+pending.
 
 **Active milestone:** M4 — Hardware admission, verified local asset management,
-and runtime integration (read-only inventory/preflight complete locally; asset
-manifests, cache verification, downloads, runtime probe, and inference pending).
+and runtime integration (read-only inventory/preflight plus pinned manifests and
+cache verification complete locally; downloads, extraction, runtime probe, and
+inference pending).
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
 `dociler` executable with help, version, workspace/platform diagnostics, config
@@ -29,9 +31,11 @@ verified, rotated, or cleared without entering configuration or command-line
 arguments. Saved profiles can be refreshed, re-checked, and edited with
 verification, concurrent-target conflict detection, visible connection state,
 and explicit consent before an existing key is sent to a changed origin. It has
-no local-backend onboarding, document parsing, local model/runtime integration,
-settings/grant update UI, or Dociler API yet. The five-platform CI workflow is
-defined; its hosted result could not be retrieved from this environment.
+an immutable model/runtime manifest and can list or SHA-256-verify existing
+cache files without mutation. It has no local-backend onboarding, downloads,
+runtime extraction/execution, document parsing, settings/grant update UI, or
+Dociler API yet. The five-platform CI workflow is defined; its hosted result
+could not be retrieved from this environment.
 
 ## Completed
 
@@ -132,6 +136,13 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
 - Added decimal 6/8/16 GB class handling, 5.5/11.5 GiB working-set floors,
   provisional model-plus-reserve disk floors, pinned minimal-feature sysinfo
   0.33.1, ADR-017, and eight tests, bringing the Linux suite to 64.
+- Added `dociler-assets-v1` with immutable revisions and exact byte/SHA-256
+  metadata for both GGUF profiles and five official llama.cpp `b10809` CPU/Metal
+  target archives at the full v0.4.0 commit.
+- Added read-only `model list` and `model verify [PROFILE]`, versioned OS-data
+  paths, fail-closed file/type/size/hash inspection, absolute data/cache test
+  overrides, pinned SHA-2 0.10.9, ADR-018, and seven tests, bringing the Linux
+  suite to 71. No model or runtime archive was downloaded or executed.
 
 ## Work in progress
 
@@ -140,12 +151,12 @@ remains unverified outside this Linux x86-64 environment.
 
 ## Next recommended task
 
-Continue M4 with a versioned pinned-asset manifest and read-only cache
-list/verification service. Resolve exact upstream model byte sizes and per-target
-`llama.cpp` artifact URLs/checksums before enabling any network download. Keep
-download consent, resumable staging, runtime execution, and TUI local selection
-as later bounded units. Validate M3/M4 on hosted target platforms when access is
-available. Implementation remains authorized.
+Continue M4 with a consent-gated, cancellable/resumable download service that
+stages partial files under the versioned asset directory, enforces the built-in
+URL/size/SHA-256, and publishes atomically without overwriting a valid cache.
+Keep archive extraction, runtime execution/probing, removal/repair UI, and TUI
+local selection as later bounded units. Validate M3/M4 on hosted target
+platforms when access is available. Implementation remains authorized.
 
 ## Blockers
 
@@ -210,8 +221,46 @@ rustup setup described in `docs/development.md` on other machines.
   decimal RAM classes, binary working-set floors, lower cgroup limits, and
   fail-closed disk/memory checks only permit a later runtime probe, never final
   admission or automatic accelerator selection.
+- ADR-018: compile immutable model revisions and the exact llama.cpp
+  release/build/commit plus per-target archive metadata into the executable;
+  keep metadata listing separate from explicit hashing, reject unsafe cache
+  components, and enable no download/extraction/execution as a side effect.
 
 ## Verification
+
+### M4 pinned asset manifest and read-only cache verification — 2026-09-20
+
+Local checks used isolated Rust 1.85.1 tooling. Upstream validation queried only
+official Hugging Face file pointers/pages and the official GitHub release API.
+No GGUF or runtime archive was downloaded, extracted, or executed.
+
+- **passed:** exact model filenames, immutable repository revisions, byte sizes,
+  and SHA-256 values against the two official Hugging Face pointers; llama.cpp
+  v0.4.0 to `b10809`/full-commit mapping and five platform archive URLs, byte
+  sizes, and SHA-256 digests against official GitHub release metadata.
+- **passed:** `cargo fmt --all -- --check` and `cargo clippy --workspace
+  --all-targets --locked --offline -- -D warnings`.
+- **passed:** `cargo test --workspace --locked --offline`: 71 tests (13 terminal,
+  13 CLI, 29 core unit, 11 foundation, 5 mock remote integration).
+- **passed:** `cargo test --workspace --release --locked --offline`: the same 71
+  tests against optimized code; doctests (none defined) and release build.
+- **passed:** manifest uniqueness/immutability/platform mapping, synthetic exact
+  size/SHA-256 success and mismatch cases, missing-cache no-write behavior, Unix
+  symlink rejection, absolute app-directory overrides, and executable list/
+  verify read-only behavior with the expected nonzero missing-asset result.
+- **passed:** release `model list`/`model verify dociler-lite` smoke using an
+  isolated empty directory, with `find` confirming no file/directory creation;
+  Rust docs with warnings denied; release PTY regression; Markdown links/headings
+  (`16` files, `27` relative links); and `git diff --check`.
+- **failed then resolved:** one CLI assertion expected the wrong display prefix;
+  strict Clippy then rejected an eight-argument manifest helper. The assertion
+  and helper shape were corrected before both full debug/release reruns passed.
+- **not run:** hashing real multi-gigabyte cached artifacts, downloading/resuming
+  assets, archive extraction/content inventory, runtime load/generation probes,
+  GPU packages beyond the pinned macOS archives, constrained-host model quality,
+  hosted CI, or native macOS/Windows/Linux ARM64 execution.
+- **not run:** documents, local inference, LAN API, installers, dependency/
+  license audits, signing/provenance, and later release gates.
 
 ### M4 hardware inventory and admission foundation — 2026-09-20
 
@@ -521,3 +570,5 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-16T01:13:48Z | Codex `/root` | Complete M3 profile refresh/edit/reconnect integration | Added config-backed refresh before commands/prompts, verified profile checks/edits, visible connection recovery, concurrent-change merge/conflict handling, cross-origin credential consent, non-disclosure guard, tests, docs, and ADR-016; resolves 00:46 entry | Core profile/config/remote services, CLI/TUI/tests, PTY harness, README, architecture/CLI/configuration/development/remote/privacy/testing/decision docs, CHECKPOINT.md | passed: fmt, strict Clippy, 56 debug and optimized tests, doctests/docs, release build/help/doctor, debug/release PTY, Markdown/Python/diff checks; not run: live providers/keychains, hosted/non-Linux platforms, later gates | COMPLETE; M3 LOCAL TEXT FLOW COMPLETE | Validate native credential/platform behavior when available; otherwise begin M4 read-only hardware inventory/admission without downloads |
 | 2026-09-20T13:25:33Z | Codex `/root` | Begin M4 hardware inventory/admission foundation | Add read-only cross-platform RAM/CPU/disk inventory, explicit Lite/Pro preflight outcomes, doctor/model status output, deterministic tests, docs, and handoff; clean starting tree | Cargo manifests/lock, core hardware/model admission services, CLI/tests, README/docs, CHECKPOINT.md | not run: M4 foundation checks pending | IN PROGRESS | Complete without runtime/model downloads, accelerator selection, local inference, documents, or persistent hardware data |
 | 2026-09-20T13:38:43Z | Codex `/root` | Complete M4 hardware inventory/admission foundation | Added process-free RAM/CPU/disk/cgroup inventory, conservative Lite/Pro preflight states, `model status`, enriched doctor output, dependency pin, tests, docs, and ADR-017; resolves 13:25 entry | Cargo manifests/lock, core hardware service, CLI/tests, README, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: fmt, strict Clippy, 64 debug and optimized tests, doctests/docs, release build/status/doctor, release PTY, Markdown/diff checks; failed then resolved: missing temporary toolchain and GB/GiB class mismatch; not run: native non-Linux hardware, accelerators/runtime/models/downloads/later gates | COMPLETE; M4 FOUNDATION ACTIVE | Add a pinned asset-manifest and read-only cache verification layer after resolving exact model/runtime artifact metadata; do not download or execute assets yet |
+| 2026-09-20T13:44:18Z | Codex `/root` | Continue M4 pinned-asset/cache integration | Validate authoritative model/runtime pins, add a versioned built-in manifest and read-only cache list/verification commands, deterministic tests, docs, and handoff; clean starting tree | Cargo manifests/lock, core asset service, CLI/tests, README/docs, CHECKPOINT.md | upstream metadata validation passed; implementation checks not run | IN PROGRESS | Complete without downloading, extracting, deleting, or executing any model/runtime asset |
+| 2026-09-20T13:59:08Z | Codex `/root` | Complete M4 pinned-asset/cache integration | Added immutable model/runtime pins, versioned paths, metadata/full-hash cache inspection, `model list`/`model verify`, app-data overrides, seven tests, docs, and ADR-018; resolves 13:44 entry | Cargo manifests/lock, core asset/path services, CLI/tests, implementation plan, README, architecture/CLI/configuration/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: upstream official metadata, fmt, strict Clippy, 71 debug/optimized tests, doctests/docs, release build/list/verify smoke, no-write find, release PTY, Markdown/diff; failed then resolved: display assertion and helper lint; not run: real assets/downloads/extraction/runtime/platform/later gates | COMPLETE; M4 ASSET VERIFICATION ACTIVE | Add consent-gated resumable staging/download and atomic publication; do not extract or execute assets yet |

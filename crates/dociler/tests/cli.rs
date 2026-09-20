@@ -24,6 +24,8 @@ impl Workspace {
         Command::new(env!("CARGO_BIN_EXE_dociler"))
             .current_dir(&self.0)
             .env("DOCILER_CONFIG_DIR", self.0.join("settings"))
+            .env("DOCILER_DATA_DIR", self.0.join("data"))
+            .env("DOCILER_CACHE_DIR", self.0.join("cache"))
             .args(args)
             .stdin(Stdio::null())
             .output()
@@ -34,6 +36,8 @@ impl Workspace {
         let mut child = Command::new(env!("CARGO_BIN_EXE_dociler"))
             .current_dir(&self.0)
             .env("DOCILER_CONFIG_DIR", self.0.join("settings"))
+            .env("DOCILER_DATA_DIR", self.0.join("data"))
+            .env("DOCILER_CACHE_DIR", self.0.join("cache"))
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -216,6 +220,34 @@ fn model_status_is_read_only_and_reports_both_preflight_tiers() {
 }
 
 #[test]
+fn model_manifest_listing_and_verification_are_read_only() {
+    let workspace = Workspace::new();
+    let list = workspace.run(&["model", "list"]);
+    assert!(list.status.success());
+    assert!(list.stderr.is_empty());
+    let text = String::from_utf8(list.stdout).unwrap();
+    assert!(text.contains("dociler-assets-v1"));
+    assert!(text.contains("dociler-lite:"));
+    assert!(text.contains("dociler-pro:"));
+    assert!(text.contains("llama.cpp runtime: v0.4.0/b10809"));
+    assert!(text.contains("cache=missing"));
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+
+    let verify = workspace.run(&["model", "verify", "dociler-lite"]);
+    assert_eq!(verify.status.code(), Some(1));
+    let verified = String::from_utf8(verify.stdout).unwrap();
+    assert!(verified.contains("dociler-lite:"));
+    assert!(!verified.contains("dociler-pro:"));
+    assert!(verified.contains("Verification was read-only"));
+    assert!(
+        String::from_utf8(verify.stderr)
+            .unwrap()
+            .contains("missing or invalid")
+    );
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+}
+
+#[test]
 fn diagnostics_reject_a_file_as_workspace() {
     let workspace = Workspace::new();
     let file = workspace.0.join("input.txt");
@@ -275,20 +307,26 @@ fn invalid_saved_config_blocks_inspection_without_disclosing_its_contents() {
 }
 
 #[test]
-fn config_override_must_be_absolute() {
+fn application_directory_overrides_must_be_absolute() {
     let workspace = Workspace::new();
-    let output = Command::new(env!("CARGO_BIN_EXE_dociler"))
-        .current_dir(&workspace.0)
-        .env("DOCILER_CONFIG_DIR", "relative-secret-value")
-        .args(["config", "init"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        !String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("relative-secret-value")
-    );
+    for variable in [
+        "DOCILER_CONFIG_DIR",
+        "DOCILER_DATA_DIR",
+        "DOCILER_CACHE_DIR",
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_dociler"))
+            .current_dir(&workspace.0)
+            .env(variable, "relative-secret-value")
+            .args(["config", "paths"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            !String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("relative-secret-value")
+        );
+    }
     assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
 }
 

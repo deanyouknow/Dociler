@@ -11,12 +11,29 @@ Initial runtime pin:
 
 - Project: `ggml-org/llama.cpp`
 - Release: `v0.4.0`
-- Commit: `5266f24`
+- Binary build: `b10809`
+- Commit: `5266f24da75dc449bd56cbed7addb9c8e4a6a73e`
 
-The release manifest must list exact platform asset URLs, byte sizes, SHA-256
-hashes, required shared libraries, supported CPU instructions, and backend.
-Never resolve `latest` during installation. Runtime upgrades require the full
-platform, model, memory, and API regression suite.
+The semantic release points to the `b10809` binary build. Manifest version
+`dociler-assets-v1` pins these initial archives from the official
+[`b10809` release](https://github.com/ggml-org/llama.cpp/releases/tag/b10809):
+
+| Target | Backend | Archive | Bytes | SHA-256 |
+| --- | --- | --- | ---: | --- |
+| macOS arm64 | Metal | `llama-b10809-bin-macos-arm64.tar.gz` | 11,123,196 | `7d692df9e1e386e62f1c12b843903218041e6cd74c9415aa39a7ed3176f9eaa2` |
+| macOS x86-64 | Metal | `llama-b10809-bin-macos-x64.tar.gz` | 11,175,330 | `13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6` |
+| Linux arm64 | CPU | `llama-b10809-bin-ubuntu-arm64.tar.gz` | 13,380,118 | `f2b7333971e1b7b42e9268bfdbfa30f5f56e2897156084d2251385df94aec358` |
+| Linux x86-64 | CPU | `llama-b10809-bin-ubuntu-x64.tar.gz` | 16,734,586 | `5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941` |
+| Windows x86-64 | CPU | `llama-b10809-bin-win-cpu-x64.zip` | 18,407,457 | `9df3158ed228a641a4b127942d7f459f24c9e13f04682659d05c00c80099b6b5` |
+
+Before runtime execution is enabled, the release manifest must additionally
+list extracted executable/shared-library inventory and supported CPU
+instructions. Never resolve `latest` during installation. Runtime upgrades
+require the full platform, model, memory, and API regression suite.
+
+Only the archive metadata and read-only cache verifier are implemented. Archive
+content/layout validation, safe extraction, executable/library inventory,
+runtime probing, GPU packages beyond macOS Metal, and execution remain pending.
 
 ## Primary model profiles
 
@@ -26,8 +43,9 @@ platform, model, memory, and API regression suite.
 - Base: Qwen3.5 4B
 - Quantization: Q4_K_M
 - Artifact repository: `bartowski/Qwen_Qwen3.5-4B-GGUF`
+- Pinned repository revision: `ba06320255db2dbec194dad738d066be90dabf29`
 - Filename: `Qwen_Qwen3.5-4B-Q4_K_M.gguf`
-- Size: 3.01 GB
+- Exact size: 3,013,027,808 bytes (3.01 GB)
 - SHA-256: `13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983`
 - Default active context: 8,192 tokens
 - Default maximum output: 2,048 tokens
@@ -41,8 +59,9 @@ platform, model, memory, and API regression suite.
 - Base: Qwen3.5 9B
 - Quantization: Q4_K_M
 - Artifact repository: `bartowski/Qwen_Qwen3.5-9B-GGUF`
+- Pinned repository revision: `2dcd842c59ea5eb119267064550a7a4c592b16c3`
 - Filename: `Qwen_Qwen3.5-9B-Q4_K_M.gguf`
-- Size: 6.17 GB
+- Exact size: 6,169,341,984 bytes (6.17 GB)
 - SHA-256: `d784ce9eda1a5a7b51e8f705a9e6310844bf4f173654d115823c775fdea56d43`
 - Default active context: 16,384 tokens
 - Default maximum output: 4,096 tokens
@@ -136,6 +155,17 @@ Model/runtime files live outside the workspace in an OS-standard user data/cache
 directory. Download to a partial file, support HTTP range resume, verify declared
 size and SHA-256, then rename atomically. Never execute a runtime whose manifest
 signature or checksum fails.
+
+The current built-in manifest is authenticated as part of the Dociler binary;
+there is no separately fetched manifest or update channel yet. Model URLs use
+immutable Hugging Face commit revisions, and runtime URLs use the exact
+`b10809` tag rather than mutable branches or `latest`. `dociler model list`
+performs metadata-only presence checks. `dociler model verify [PROFILE]` reads
+the selected model(s) and current-platform runtime archive in bounded chunks,
+checks exact bytes and SHA-256, and returns nonzero unless all requested assets
+verify. It rejects symlinked cache roots/components and non-regular files. It
+does not create cache paths or download, extract, delete, repair, or execute
+anything.
 
 Display download source and license before consent. Support list, verify, remove,
 repair, and update operations without deleting unrelated cached assets.

@@ -11,16 +11,17 @@ generation controller, cancellable HTTP, and an initial interactive multi-turn
 terminal surface with remote onboarding, confirmed profile removal, and verified
 credential rotation. It also includes config-backed refresh, saved-profile
 health checks, verified endpoint/model editing, and visible reconnect state.
-M4 begins with read-only RAM/CPU/disk inventory and conservative Lite/Pro
-preflight reporting. Local onboarding, downloads, inference, document processing,
-and serving remain future work. See
+M4 includes read-only RAM/CPU/disk inventory, conservative Lite/Pro preflight
+reporting, and a built-in pinned manifest with cache presence and SHA-256
+verification. Local onboarding, asset download/extraction, inference, document
+processing, and serving remain future work. See
 [Configuration](configuration.md) and
 [Remote providers](remote-providers.md) for commands and boundaries.
 
 Direct dependencies are pinned: directories 6.0.0, Serde 1.0.219, serde_json
 1.0.140, tempfile 3.19.1, zeroize 1.8.1, URL 2.5.4, Reqwest 0.12.23,
-keyring 3.6.3, Ratatui 0.29.0, Crossterm 0.28.1, Unicode Width 0.2.0, and
-sysinfo 0.33.1 with only system/disk features.
+keyring 3.6.3, Ratatui 0.29.0, Crossterm 0.28.1, Unicode Width 0.2.0,
+SHA-2 0.10.9, and sysinfo 0.33.1 with only system/disk features.
 Futures Util 0.3.34 and Tokio 1.53.1 support cancellable remote I/O without a
 process-global runtime.
 The lockfile pins transitives. These
@@ -52,6 +53,8 @@ cargo run --locked -- doctor
 cargo run --locked -- config paths
 cargo run --locked -- config show
 cargo run --locked -- model status
+cargo run --locked -- model list
+cargo run --locked -- model verify dociler-lite
 cargo run --locked -- connect list
 cargo run --locked -- connect check PROFILE
 cargo run --locked -- connect edit PROFILE URL MODEL
@@ -88,12 +91,20 @@ They do not create the model/runtime directories, download assets, select an
 accelerator, or certify a model. A positive tier result means only that the
 future runtime load/generation probe may be attempted.
 
+`model list` reads filesystem metadata for the two pinned GGUF files and the
+current platform's runtime archive without hashing. `model verify [PROFILE]`
+streams each selected cached file through SHA-256 and returns nonzero when a
+model or the runtime is missing, unsafe, unreadable, or does not match. Omitting
+`PROFILE` verifies both tiers. These commands never create, repair, remove,
+extract, download, or execute an asset.
+
 ## Workspace boundaries
 
 - `crates/dociler`: process entrypoint, CLI parsing/output, Ratatui/Crossterm
   terminal adapter, and executable/TUI integration tests.
 - `crates/dociler-core`: shared services independent of TUI/HTTP. Diagnostics is
-  accompanied by config, paths, workspace, session, and credential modules.
+  accompanied by config, paths, workspace, session, credential, hardware, and
+  pinned-asset/cache-verification modules.
   Add substantive modules as features arrive rather than
   empty placeholder crates for every subsystem.
 - `scripts/check_docs.py`: development-only handoff document checks.

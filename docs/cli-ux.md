@@ -71,10 +71,11 @@ available through [Remote providers](remote-providers.md).
 ## First-run wizard
 
 The remote half of this wizard is implemented in M3. M4 now provides read-only
-hardware/preflight reporting through the non-interactive `model status` command,
-but the TUI local choice, runtime probe, and asset management remain pending. A
-profile-free launch therefore still proceeds directly to remote setup; Escape
-cancels without saving.
+hardware/preflight reporting through `model status`, pinned cache presence
+through `model list`, and explicit checksum verification through `model verify
+[PROFILE]`. Download, repair, extraction, runtime probes, and the TUI local
+choice remain pending. A profile-free launch therefore still proceeds directly
+to remote setup; Escape cancels without saving.
 
 ### Backend choice
 
@@ -138,9 +139,9 @@ the selected set and estimated processing work.
 
 Only `/help`, `/status`, `/connect [NAME|add|refresh|check NAME|edit NAME|remove
 NAME|key NAME]`, confirmed `/clear`, and `/exit` are active in the current
-terminal surface. `dociler model status` is available outside the TUI; the
-interactive `/model` workflow and the remaining rows are the approved target
-contract.
+terminal surface. `dociler model status`, `model list`, and `model verify
+[PROFILE]` are available outside the TUI; the interactive `/model` workflow and
+the remaining rows are the approved target contract.
 
 ## Write experience
 

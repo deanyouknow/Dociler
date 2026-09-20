@@ -3,6 +3,7 @@
 //! Configuration contains only preferences and approved workspace identities;
 //! session content and credentials are deliberately not serializable settings.
 
+pub mod assets;
 pub mod cancellation;
 pub mod chat;
 pub mod config;

@@ -172,5 +172,11 @@ available-memory and disk failures, successful probe eligibility, and
 fail-closed missing data. A live smoke test asserts that inventory creates no
 target directory and leaves at least one logical CPU available. CLI integration
 coverage verifies that `model status` reports both tiers without workspace
-writes. These tests do not qualify a model, accelerator, runtime artifact, or
+writes. The next asset tests verify manifest uniqueness, immutable HTTPS
+sources, explicit platform mapping, missing-cache no-write behavior, separated
+metadata/full-hash states, exact-size and SHA-256 mismatch rejection, and Unix
+symlink rejection. CLI coverage asserts that list/verify remain read-only and
+that missing assets produce a failing verification status. Synthetic five-byte
+fixtures exercise hashing; no multi-gigabyte model/runtime artifact is fetched.
+These tests do not qualify a model, accelerator, extracted runtime, or
 constrained-memory host.
