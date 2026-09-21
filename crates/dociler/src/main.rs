@@ -10,6 +10,9 @@ use dociler_core::chat::CancellationToken;
 use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings, LocalProfile};
 use dociler_core::credentials::{CredentialError, CredentialStore, OsCredentialStore, Secret};
 use dociler_core::diagnostics::Diagnostics;
+use dociler_core::downloads::{
+    DownloadError, DownloadOptions, DownloadOutcome, DownloadProgress, download_cached_asset,
+};
 use dociler_core::hardware::{
     AcceleratorCandidate, HardwareInventory, MemoryScope, ModelPreflight, PreflightStatus,
 };
@@ -19,6 +22,10 @@ use dociler_core::profiles::{
     install_remote_profile, remove_remote_profile, rotate_remote_credential,
 };
 use dociler_core::remote::{RemoteClient, RemoteError, RemoteProfile};
+use dociler_core::runtime_install::{
+    RuntimeInstallError, RuntimeInstallOptions, RuntimeInstallOutcome, RuntimeInstallState,
+    inspect_installed_runtime, install_cached_runtime,
+};
 use dociler_core::session::{Role, Session};
 use dociler_core::workspace::{Workspace, WritePolicy};
 
@@ -38,6 +45,10 @@ Commands:
   model list    List pinned local assets and cache presence (no writes or hashing)
   model verify [PROFILE]
                 Verify cached model/runtime sizes and SHA-256 (no writes)
+  model download PROFILE --confirm [--restart]
+                Download the pinned runtime and model; resume partial files by default
+  model runtime-install --confirm
+                Safely extract and inventory the verified pinned runtime (never execute it)
   connect list  List saved remote profiles (never credentials)
   connect verify URL MODEL
                 Verify an endpoint without saving it
@@ -77,6 +88,14 @@ enum Command {
     ModelList,
     ModelVerify {
         profile: Option<LocalProfile>,
+    },
+    ModelDownload {
+        profile: LocalProfile,
+        confirmed: bool,
+        restart_partial: bool,
+    },
+    ModelRuntimeInstall {
+        confirmed: bool,
     },
     ConnectList,
     ConnectVerify {
@@ -143,6 +162,42 @@ fn parse(args: &[OsString]) -> Option<Command> {
             Some(Command::ModelVerify {
                 profile: Some(profile),
             })
+        }
+        [command, action, profile] if command == "model" && action == "download" => {
+            Some(Command::ModelDownload {
+                profile: parse_local_profile(profile)?,
+                confirmed: false,
+                restart_partial: false,
+            })
+        }
+        [command, action, profile, flag]
+            if command == "model" && action == "download" && flag == "--confirm" =>
+        {
+            Some(Command::ModelDownload {
+                profile: parse_local_profile(profile)?,
+                confirmed: true,
+                restart_partial: false,
+            })
+        }
+        [command, action, profile, first, second]
+            if command == "model"
+                && action == "download"
+                && ((first == "--confirm" && second == "--restart")
+                    || (first == "--restart" && second == "--confirm")) =>
+        {
+            Some(Command::ModelDownload {
+                profile: parse_local_profile(profile)?,
+                confirmed: true,
+                restart_partial: true,
+            })
+        }
+        [command, action] if command == "model" && action == "runtime-install" => {
+            Some(Command::ModelRuntimeInstall { confirmed: false })
+        }
+        [command, action, flag]
+            if command == "model" && action == "runtime-install" && flag == "--confirm" =>
+        {
+            Some(Command::ModelRuntimeInstall { confirmed: true })
         }
         [command, action] if command == "connect" && action == "list" => Some(Command::ConnectList),
         [command, action, url, model] if command == "connect" && action == "verify" => {
@@ -231,6 +286,14 @@ fn parse(args: &[OsString]) -> Option<Command> {
     }
 }
 
+fn parse_local_profile(value: &OsString) -> Option<LocalProfile> {
+    match value.to_str()? {
+        "dociler-lite" => Some(LocalProfile::Lite),
+        "dociler-pro" => Some(LocalProfile::Pro),
+        _ => None,
+    }
+}
+
 enum CommandError {
     Output(io::Error),
     Workspace,
@@ -240,6 +303,8 @@ enum CommandError {
     Usage(&'static str),
     Conflict,
     AssetVerification,
+    AssetDownload(DownloadError),
+    RuntimeInstall(RuntimeInstallError),
     Remote(RemoteError),
     Terminal,
 }
@@ -483,7 +548,21 @@ fn print_runtime_cache(
     writeln!(output, "  source={}", runtime.artifact().source_url())?;
     writeln!(output, "  sha256={}", runtime.artifact().sha256())?;
     writeln!(output, "  file={:?}", inspection.path())?;
-    Ok(inspection.state().is_verified())
+    let installed = inspect_installed_runtime(app_paths, *runtime, level);
+    let installed_state = installed.state();
+    writeln!(
+        output,
+        "  installed={} directory={:?} server={:?}",
+        match installed_state {
+            RuntimeInstallState::Missing => "missing",
+            RuntimeInstallState::PresentUnverified => "present; checksums not run",
+            RuntimeInstallState::Verified => "verified",
+            RuntimeInstallState::Invalid => "invalid",
+        },
+        installed.path(),
+        installed.server_path()
+    )?;
+    Ok(inspection.state().is_verified() && installed_state != RuntimeInstallState::Invalid)
 }
 
 fn print_asset_manifest_header(output: &mut impl Write) -> io::Result<()> {
@@ -495,6 +574,70 @@ fn print_asset_manifest_header(output: &mut impl Write) -> io::Result<()> {
         output,
         "Runtime pin: llama.cpp {LLAMA_CPP_RELEASE}, build {LLAMA_CPP_BUILD}, commit {LLAMA_CPP_COMMIT}"
     )
+}
+
+fn download_asset(
+    output: &mut impl Write,
+    app_paths: &AppPaths,
+    label: &str,
+    license: &str,
+    artifact: dociler_core::assets::AssetSpec,
+    restart_partial: bool,
+) -> Result<(), CommandError> {
+    writeln!(output, "Downloading {label}:")?;
+    writeln!(output, "  license={license}")?;
+    writeln!(output, "  source={}", artifact.source_url())?;
+    writeln!(output, "  bytes={}", artifact.byte_size())?;
+    writeln!(output, "  sha256={}", artifact.sha256())?;
+    writeln!(output, "  destination={:?}", artifact.cache_path(app_paths))?;
+    output.flush()?;
+
+    let mut last_percent = None;
+    let mut progress_error = None;
+    let outcome = download_cached_asset(
+        app_paths,
+        artifact,
+        DownloadOptions::confirmed(restart_partial),
+        &CancellationToken::new(),
+        |DownloadProgress {
+             downloaded_bytes,
+             total_bytes,
+             resumed_from,
+         }| {
+            let percent = downloaded_bytes.saturating_mul(100) / total_bytes.max(1);
+            if last_percent.is_none_or(|previous| percent >= previous + 5 || percent == 100) {
+                if let Err(error) = writeln!(
+                    output,
+                    "  progress={percent}% ({downloaded_bytes}/{total_bytes} bytes, resumed-from={resumed_from})"
+                ) {
+                    progress_error = Some(error);
+                }
+                last_percent = Some(percent);
+            }
+        },
+    );
+    if let Some(error) = progress_error {
+        return Err(CommandError::Output(error));
+    }
+    match outcome.map_err(CommandError::AssetDownload)? {
+        DownloadOutcome::AlreadyVerified => writeln!(output, "  result=already verified")?,
+        DownloadOutcome::Published {
+            resumed_from,
+            partial_cleanup_warning,
+        } => {
+            writeln!(
+                output,
+                "  result=verified and published (resumed-from={resumed_from})"
+            )?;
+            if partial_cleanup_warning {
+                writeln!(
+                    output,
+                    "  warning=verified final asset is ready, but its partial sibling could not be removed"
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn environment_secret() -> Result<Option<Secret>, CommandError> {
@@ -637,6 +780,100 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             if !verified {
                 return Err(CommandError::AssetVerification);
             }
+        }
+        Command::ModelDownload {
+            profile,
+            confirmed,
+            restart_partial,
+        } => {
+            if !confirmed {
+                return Err(CommandError::Usage(
+                    "model download requires explicit consent: dociler model download PROFILE --confirm [--restart]",
+                ));
+            }
+            let app_paths = paths()?;
+            let runtime = current_runtime_asset().ok_or(CommandError::Usage(
+                "no pinned llama.cpp runtime exists for this platform; use Remote mode",
+            ))?;
+            let model = dociler_core::assets::model_asset(profile);
+            print_asset_manifest_header(output)?;
+            writeln!(
+                output,
+                "Consent recorded for these two immutable artifacts. No document or credential will be transmitted."
+            )?;
+            download_asset(
+                output,
+                &app_paths,
+                "llama.cpp runtime archive",
+                "MIT",
+                runtime.artifact(),
+                restart_partial,
+            )?;
+            download_asset(
+                output,
+                &app_paths,
+                profile.alias(),
+                model.license(),
+                model.artifact(),
+                restart_partial,
+            )?;
+            writeln!(
+                output,
+                "Assets are cached and verified only; archive extraction and local execution remain disabled."
+            )?;
+        }
+        Command::ModelRuntimeInstall { confirmed } => {
+            if !confirmed {
+                return Err(CommandError::Usage(
+                    "runtime installation requires explicit consent: dociler model runtime-install --confirm",
+                ));
+            }
+            let app_paths = paths()?;
+            let runtime = current_runtime_asset().ok_or(CommandError::Usage(
+                "no pinned llama.cpp runtime exists for this platform; use Remote mode",
+            ))?;
+            print_asset_manifest_header(output)?;
+            writeln!(output, "Preparing the verified current-platform runtime:")?;
+            writeln!(
+                output,
+                "  archive={:?}",
+                runtime.artifact().cache_path(&app_paths)
+            )?;
+            writeln!(output, "  archive-sha256={}", runtime.artifact().sha256())?;
+            writeln!(
+                output,
+                "  policy=private staging; bounded entries/bytes; no links or special files in the installed tree"
+            )?;
+            output.flush()?;
+            let outcome = install_cached_runtime(
+                &app_paths,
+                *runtime,
+                RuntimeInstallOptions::confirmed(),
+                &CancellationToken::new(),
+            )
+            .map_err(CommandError::RuntimeInstall)?;
+            let inspection =
+                inspect_installed_runtime(&app_paths, *runtime, VerificationLevel::Sha256);
+            match outcome {
+                RuntimeInstallOutcome::AlreadyInstalled => {
+                    writeln!(output, "Runtime already installed and verified.")?;
+                }
+                RuntimeInstallOutcome::Installed {
+                    file_count,
+                    expanded_bytes,
+                } => {
+                    writeln!(
+                        output,
+                        "Installed and inventoried {file_count} files ({expanded_bytes} bytes)."
+                    )?;
+                }
+            }
+            writeln!(output, "Runtime directory: {:?}", inspection.path())?;
+            writeln!(output, "llama-server: {:?}", inspection.server_path())?;
+            writeln!(
+                output,
+                "The runtime was not launched or probed; local inference remains disabled."
+            )?;
         }
         Command::ConnectList => {
             let loaded = settings()?;
@@ -894,6 +1131,91 @@ fn main() -> ExitCode {
                 CommandError::AssetVerification => {
                     "one or more cached assets are missing or invalid; nothing was changed."
                 }
+                CommandError::AssetDownload(error) => match error {
+                    DownloadError::ConsentRequired => {
+                        "asset download requires explicit --confirm consent; nothing was changed."
+                    }
+                    DownloadError::UnsupportedSource => {
+                        "asset source or redirect was rejected; only pinned HTTPS origins are allowed."
+                    }
+                    DownloadError::UnsafePath => {
+                        "asset cache path is unsafe; symlinks and non-directory ancestors are rejected."
+                    }
+                    DownloadError::ExistingInvalid => {
+                        "an invalid final asset already exists; it was not overwritten."
+                    }
+                    DownloadError::InvalidPartial => {
+                        "the partial asset is unsafe or larger than the manifest; inspect it or retry with --restart."
+                    }
+                    DownloadError::Busy => {
+                        "another Dociler process is downloading this asset; retry after it finishes."
+                    }
+                    DownloadError::Connection => {
+                        "asset connection failed; the verified final path was not changed and partial bytes remain resumable."
+                    }
+                    DownloadError::Upstream => {
+                        "asset server returned an error; the verified final path was not changed."
+                    }
+                    DownloadError::ResumeRejected => {
+                        "asset server rejected resume; the partial was preserved. Retry with --restart to fetch from byte zero."
+                    }
+                    DownloadError::InvalidResponse => {
+                        "asset server returned inconsistent range or length metadata; the final path was not changed."
+                    }
+                    DownloadError::SizeMismatch => {
+                        "asset transfer ended at the wrong size; the partial was preserved for retry."
+                    }
+                    DownloadError::HashMismatch => {
+                        "asset SHA-256 did not match the built-in manifest; nothing was published. Retry with --restart."
+                    }
+                    DownloadError::Cancelled => {
+                        "asset download was cancelled; partial bytes remain resumable."
+                    }
+                    DownloadError::PublishConflict => {
+                        "the final asset changed while publishing; nothing was overwritten."
+                    }
+                    DownloadError::Io(_) => {
+                        "asset cache I/O failed; check cache ownership, permissions, and free space."
+                    }
+                },
+                CommandError::RuntimeInstall(error) => match error {
+                    RuntimeInstallError::ConsentRequired => {
+                        "runtime installation requires explicit --confirm consent; nothing was changed."
+                    }
+                    RuntimeInstallError::ArchiveMissing => {
+                        "the pinned runtime archive is missing; run 'dociler model download PROFILE --confirm' first."
+                    }
+                    RuntimeInstallError::ArchiveUnverified => {
+                        "the cached runtime archive failed size or SHA-256 verification; nothing was extracted."
+                    }
+                    RuntimeInstallError::UnsupportedArchive => {
+                        "the pinned runtime archive format is unsupported on this platform."
+                    }
+                    RuntimeInstallError::UnsafeArchive => {
+                        "the runtime archive contains an unsafe path, link, duplicate, or special entry; nothing was published."
+                    }
+                    RuntimeInstallError::LimitsExceeded => {
+                        "the runtime archive exceeds Dociler's entry, file, path, or expanded-size limit."
+                    }
+                    RuntimeInstallError::ExpectedServerMissing => {
+                        "the archive does not contain the expected llama-server executable; nothing was published."
+                    }
+                    RuntimeInstallError::ExistingInvalid => {
+                        "an invalid installed runtime already exists; it was not overwritten."
+                    }
+                    RuntimeInstallError::Busy => {
+                        "another Dociler process is installing this runtime; retry after it finishes."
+                    }
+                    RuntimeInstallError::Cancelled => {
+                        "runtime installation was cancelled; private staging was removed."
+                    }
+                    RuntimeInstallError::PublishConflict => {
+                        "the runtime install path changed while publishing; nothing was overwritten."
+                    }
+                    RuntimeInstallError::Io(_) => {
+                        "runtime installation I/O failed; check ownership, permissions, and free space."
+                    }
+                },
                 CommandError::Remote(error) => match error {
                     RemoteError::InvalidProfile => "invalid remote profile name, URL, or model.",
                     RemoteError::UnsafeEndpoint => {

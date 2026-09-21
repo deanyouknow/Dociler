@@ -13,8 +13,10 @@ credential rotation. It also includes config-backed refresh, saved-profile
 health checks, verified endpoint/model editing, and visible reconnect state.
 M4 includes read-only RAM/CPU/disk inventory, conservative Lite/Pro preflight
 reporting, and a built-in pinned manifest with cache presence and SHA-256
-verification. Local onboarding, asset download/extraction, inference, document
-processing, and serving remain future work. See
+verification, plus a consent-gated resumable asset downloader with no-clobber
+publication and bounded runtime archive extraction with per-file inventory.
+Local onboarding, runtime probing/inference, document processing, and serving
+remain future work. See
 [Configuration](configuration.md) and
 [Remote providers](remote-providers.md) for commands and boundaries.
 
@@ -23,7 +25,10 @@ Direct dependencies are pinned: directories 6.0.0, Serde 1.0.219, serde_json
 keyring 3.6.3, Ratatui 0.29.0, Crossterm 0.28.1, Unicode Width 0.2.0,
 SHA-2 0.10.9, and sysinfo 0.33.1 with only system/disk features.
 Futures Util 0.3.34 and Tokio 1.53.1 support cancellable remote I/O without a
-process-global runtime.
+process-global runtime. fs2 0.4.3 provides cross-platform advisory asset locks;
+libc 0.2.189 is used only for Unix no-follow file opens. flate2 1.1.2 (Rust
+backend), tar 0.4.44, and ZIP 2.4.2 (Deflate only) provide in-process bounded
+runtime archive parsing.
 The lockfile pins transitives. These
 are deliberate Rust-1.85-compatible baseline pins, not claims to be the latest
 releases. Dependency vulnerability/license audits remain release work.
@@ -55,6 +60,8 @@ cargo run --locked -- config show
 cargo run --locked -- model status
 cargo run --locked -- model list
 cargo run --locked -- model verify dociler-lite
+cargo run --locked -- model download dociler-lite --confirm
+cargo run --locked -- model runtime-install --confirm
 cargo run --locked -- connect list
 cargo run --locked -- connect check PROFILE
 cargo run --locked -- connect edit PROFILE URL MODEL
@@ -97,6 +104,20 @@ streams each selected cached file through SHA-256 and returns nonzero when a
 model or the runtime is missing, unsafe, unreadable, or does not match. Omitting
 `PROFILE` verifies both tiers. These commands never create, repair, remove,
 extract, download, or execute an asset.
+
+`model download PROFILE --confirm [--restart]` is the explicit asset mutation
+path. It downloads only the built-in current-platform runtime and selected
+model, resumes a verified-prefix partial by default, and publishes only after
+exact size/SHA-256 checks. `--restart` removes only that managed partial before
+starting again. It does not extract or execute the runtime. The transport has a
+cooperative cancellation token; terminal signal wiring for this scriptable path
+is still pending, while process termination leaves the partial resumable.
+
+`model runtime-install --confirm` revalidates and safely extracts the pinned
+current-platform archive, creates a per-file inventory, and publishes a private
+versioned runtime directory. It does not run or probe `llama-server`. `model
+list` reports metadata state for that directory; `model verify` additionally
+rehashes inventoried runtime files when an install exists.
 
 ## Workspace boundaries
 

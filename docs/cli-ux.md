@@ -73,9 +73,19 @@ available through [Remote providers](remote-providers.md).
 The remote half of this wizard is implemented in M3. M4 now provides read-only
 hardware/preflight reporting through `model status`, pinned cache presence
 through `model list`, and explicit checksum verification through `model verify
-[PROFILE]`. Download, repair, extraction, runtime probes, and the TUI local
-choice remain pending. A profile-free launch therefore still proceeds directly
-to remote setup; Escape cancels without saving.
+[PROFILE]`. The scriptable `model download PROFILE --confirm [--restart]`
+command downloads the current-platform runtime archive followed by the selected
+model, resumes a managed partial by default, and publishes only after exact size
+and SHA-256 verification. `--restart` explicitly discards only that managed
+partial. Repair/removal, runtime probes, progress inside the TUI, and the TUI
+local choice remain pending. A profile-free launch therefore still
+proceeds directly to remote setup; Escape cancels without saving.
+
+After a runtime archive is cached, `model runtime-install --confirm` performs
+bounded private extraction and shows the resulting inventory size and
+`llama-server` path. The command never runs that executable. `model list` shows
+the installed-tree metadata state, while `model verify` performs full per-file
+inventory checks when an installed tree exists.
 
 ### Backend choice
 
@@ -140,8 +150,12 @@ the selected set and estimated processing work.
 Only `/help`, `/status`, `/connect [NAME|add|refresh|check NAME|edit NAME|remove
 NAME|key NAME]`, confirmed `/clear`, and `/exit` are active in the current
 terminal surface. `dociler model status`, `model list`, and `model verify
-[PROFILE]` are available outside the TUI; the interactive `/model` workflow and
-the remaining rows are the approved target contract.
+[PROFILE]` are available outside the TUI, as is the explicitly confirmed
+`model download PROFILE --confirm [--restart]`; the interactive `/model`
+workflow and the remaining rows are the approved target contract. The core
+download transport is cooperatively cancellable, while signal/keyboard wiring
+for this scriptable command remains a later CLI/TUI integration unit; abrupt
+termination safely leaves the `.partial` file resumable.
 
 ## Write experience
 

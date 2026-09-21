@@ -35,6 +35,25 @@ pub struct AssetSpec {
 }
 
 impl AssetSpec {
+    #[cfg(test)]
+    pub(crate) const fn test_fixture(
+        kind: AssetKind,
+        cache_key: &'static str,
+        file_name: &'static str,
+        byte_size: u64,
+        sha256: &'static str,
+    ) -> Self {
+        Self {
+            id: "test-fixture",
+            kind,
+            cache_key,
+            file_name,
+            source_url: "http://127.0.0.1/fixture",
+            byte_size,
+            sha256,
+        }
+    }
+
     pub const fn id(self) -> &'static str {
         self.id
     }
@@ -120,6 +139,20 @@ struct RuntimeTarget {
 }
 
 impl RuntimeAsset {
+    #[cfg(test)]
+    pub(crate) const fn test_fixture(
+        operating_system: &'static str,
+        architecture: &'static str,
+        artifact: AssetSpec,
+    ) -> Self {
+        Self {
+            operating_system,
+            architecture,
+            backend: "test",
+            artifact,
+        }
+    }
+
     pub const fn operating_system(self) -> &'static str {
         self.operating_system
     }

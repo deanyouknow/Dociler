@@ -152,9 +152,10 @@ Defaults:
 ## Download and storage
 
 Model/runtime files live outside the workspace in an OS-standard user data/cache
-directory. Download to a partial file, support HTTP range resume, verify declared
-size and SHA-256, then rename atomically. Never execute a runtime whose manifest
-signature or checksum fails.
+directory. Download to a restrictive partial file, support HTTP range resume,
+verify declared size and SHA-256, then publish atomically without replacing an
+existing final path. Never execute a runtime whose manifest signature or
+checksum fails.
 
 The current built-in manifest is authenticated as part of the Dociler binary;
 there is no separately fetched manifest or update channel yet. Model URLs use
@@ -167,8 +168,44 @@ verify. It rejects symlinked cache roots/components and non-regular files. It
 does not create cache paths or download, extract, delete, repair, or execute
 anything.
 
+`dociler model download PROFILE --confirm [--restart]` implements the mutation
+boundary. It shows the built-in URL, exact bytes, checksum, and destination;
+downloads the pinned platform runtime followed by the chosen GGUF; uses a
+per-asset process lock; sends `Accept-Encoding: identity`; and permits only the
+expected HTTPS Hugging Face/GitHub redirect families. Existing partial bytes are
+hashed before an exact `Range` resume. A server that ignores or contradicts the
+range is rejected without appending. Size and SHA-256 must match before a
+same-directory, no-clobber hard-link publication; an existing valid final is
+reused, while an invalid final is never overwritten. Failed, interrupted, and
+checksum-invalid partials remain for inspection/resume; only explicit
+`--restart` removes the managed partial. Runtime archives remain unextracted and
+nothing downloaded by this command is executed.
+
+`dociler model runtime-install --confirm` requires the current-platform archive
+to pass its manifest size and SHA-256 again, then extracts it under the same
+versioned runtime namespace. Tar archives must have the exact
+`llama-b10809/` root; the Windows ZIP is rooted at its top level. Extraction is
+limited to 256 entries, 128 MiB per file, 256 MiB total expanded output, and
+512-byte portable paths. Absolute/traversal/backslash/alternate-stream and
+Windows device names, duplicates, encryption, hard links, sparse/special files,
+and unsupported entry types fail closed. Safe relative library symlinks in the
+official Unix archives are materialized as regular files; the installed tree
+contains no links. A private JSON inventory binds every output path, exact byte
+size, and SHA-256 to the built-in archive identity. The expected
+`llama-server`/`llama-server.exe` must be a regular inventoried file and is the
+only output granted execute permission on Unix. Staging is removed on failure,
+and an existing invalid runtime directory is never overwritten.
+
+The five official archives were inspected during this implementation: all
+matched the existing manifest checksums, contained 51–61 archive entries, and
+expanded to roughly 26–47 MB before safe-link materialization. The Linux x86-64
+archive was also installed end-to-end into an isolated temporary data directory,
+producing 60 inventoried files and 69,015,606 bytes after link materialization.
+It was not executed.
+
 Display download source and license before consent. Support list, verify, remove,
-repair, and update operations without deleting unrelated cached assets.
+repair, and update operations without deleting unrelated cached assets. Removal
+and repair remain pending.
 
 ## Qualification gates
 

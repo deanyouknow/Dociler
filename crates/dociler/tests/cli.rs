@@ -248,6 +248,30 @@ fn model_manifest_listing_and_verification_are_read_only() {
 }
 
 #[test]
+fn model_download_requires_consent_before_creating_state() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["model", "download", "dociler-lite"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("explicit consent"));
+    assert!(error.contains("--confirm"));
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+}
+
+#[test]
+fn runtime_install_requires_consent_before_creating_state() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["model", "runtime-install"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("explicit consent"));
+    assert!(error.contains("--confirm"));
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+}
+
+#[test]
 fn diagnostics_reject_a_file_as_workspace() {
     let workspace = Workspace::new();
     let file = workspace.0.join("input.txt");

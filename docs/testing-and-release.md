@@ -180,3 +180,22 @@ that missing assets produce a failing verification status. Synthetic five-byte
 fixtures exercise hashing; no multi-gigabyte model/runtime artifact is fetched.
 These tests do not qualify a model, accelerator, extracted runtime, or
 constrained-memory host.
+
+The next M4 download tests use only synthetic 11-byte loopback fixtures. They
+cover consent-before-mutation, complete publication, exact range resume, ignored
+range rejection without append, checksum failure without publication, verified
+cache short-circuiting, stalled-body cancellation, restrictive Unix modes, and
+CLI refusal before `--confirm`. No real model/runtime artifact is downloaded,
+extracted, or executed; multi-gigabyte resume behavior and native non-Linux
+filesystem semantics remain release-gate work.
+
+The runtime-install tests generate local tar.gz and ZIP fixtures and cover
+consent-before-mutation, safe-link materialization, hard-link and escaping-link
+rejection, required server naming, private executable permissions, exact
+inventory verification, modified/extra-file detection, portable traversal and
+Windows device-name rejection, and refusal to overwrite an invalid install.
+CLI coverage verifies that missing consent creates no state. A smoke check used
+the real pinned Linux x86-64 archive in an isolated temporary data directory,
+verified its checksum, installed and reverified 60 files/69,015,606 bytes, and
+confirmed the tree had no symlinks; no runtime executable was launched. Other
+native platforms and hostile decompression stress corpora remain release gates.

@@ -207,9 +207,31 @@ share this service across the CLI and future onboarding. Cache walking rejects
 symlinks and non-regular components and never creates a missing directory. The
 currently opened file is hashed in bounded chunks, but future runtime execution
 must reopen/revalidate the installed object immediately before use to close the
-remaining inspection-to-execution race. Downloads, safe archive extraction,
-accelerator discovery/selection, `llama-server` lifecycle, and local inference
-are not implemented yet.
+remaining inspection-to-execution race.
+
+The `downloads` service adds the first M4 mutation path behind explicit caller
+consent. It creates only versioned OS-data directories, takes a per-asset OS
+file lock, hashes a restrictive managed partial, and resumes with a validated
+HTTP range from an immutable manifest URL. It rejects unsafe origin families,
+redirect downgrades, inconsistent lengths/ranges, excess bytes, and checksum
+mismatches. A verified partial is published with a same-directory no-clobber
+hard link, so a concurrent or pre-existing final is never replaced. Partial
+bytes remain after interruption for a later resume. The CLI currently invokes
+this for the platform runtime archive and chosen model.
+
+The `runtime_install` service reopens and rehashes the pinned archive before
+private extraction. It accepts only the manifest-selected tar.gz/ZIP layout,
+enforces path, entry-count, individual-file, and total-expanded-size bounds,
+rejects duplicates, hard links, device/FIFO entries, encryption, traversal, and
+portable Windows-special paths. Official Unix bundles contain relative library
+symlinks; Dociler verifies their targets remain within the extracted inventory
+and materializes them as ordinary private files, leaving no links in the
+installed tree. It records each file's path, size, and SHA-256 in a bounded
+inventory, verifies the complete staging tree, then publishes a versioned
+runtime directory without replacing an existing invalid install. Inspection can
+perform metadata-only or full per-file verification. No code is launched during
+installation. Accelerator discovery/selection, runtime probing,
+`llama-server` lifecycle, and local inference remain unimplemented.
 
 ## Failure containment
 
@@ -218,5 +240,6 @@ are not implemented yet.
 - A malformed remote stream terminates only that turn and keeps unsent history.
 - An invalid citation is removed or marked unverified; it is never silently
   presented as a valid source.
-- Partial downloads and exports are written to temporary paths and atomically
-  renamed only after verification/success.
+- Partial downloads and exports are written to managed temporary paths and
+  published only after verification/success. Asset publication is explicitly
+  no-clobber; resumable asset partials survive interruption.

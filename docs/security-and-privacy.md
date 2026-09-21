@@ -28,8 +28,12 @@ or asset requests must not attach this inventory.
 | API keys and bearer tokens | OS credential store | Persist only as required by the saved profile/service. |
 | User exports | Explicit user-selected path | User-controlled. |
 
-Temporary upload, download, and export files use restrictive permissions and are
-removed on success, error, cancellation, disconnect, and next-start recovery.
+Temporary upload and export files use restrictive permissions and are removed
+on success, error, cancellation, disconnect, and next-start recovery. Managed
+asset `.partial` files also use restrictive permissions, but intentionally
+survive transfer errors, cancellation, and process exit so a multi-gigabyte
+download can resume; they are removed after successful publication or by an
+explicit scoped restart/removal operation.
 
 ## Local and remote network rules
 
@@ -174,9 +178,24 @@ The first asset layer embeds `dociler-assets-v1` in the executable and uses only
 immutable upstream revisions/tags. Read-only listing checks file metadata;
 explicit verification additionally streams exact-length regular files through
 SHA-256. Symlinked cache roots/components and non-regular files fail closed.
-This is not yet a downloader or execution authorization: signed external update
-metadata, partial-file handling, safe archive extraction/inventory, and
-revalidation at execution time remain required before local inference can run.
+The download layer requires explicit CLI consent before filesystem/network
+mutation, accepts only the built-in HTTPS origin/redirect families, disables
+proxies, locks each asset, validates range metadata before appending, caps bytes
+at the manifest size, and publishes a verified partial without replacing an
+existing final path. Cancellation drops a stalled body request and preserves
+the partial. This is not execution authorization: signed external update
+metadata, execution-time revalidation, process isolation, and runtime probing
+remain required before local inference can run.
+
+The extraction layer now rehashes the archive immediately before reading it,
+uses a private same-filesystem staging directory, and never delegates parsing to
+shell archive tools. It rejects unsafe/special entries and decompression limits,
+materializes only validated in-root library links as regular files, records
+per-file size/SHA-256 inventory, and refuses to replace an invalid installed
+tree. Full verification rejects altered, missing, extra, linked, or non-regular
+outputs. The runtime is still not authorized for execution: a later launch path
+must perform final inventory verification, apply process/network limits, and
+pass a bounded health/generation probe before selection.
 
 ## Threat boundary
 

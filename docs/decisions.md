@@ -267,3 +267,56 @@ gives automation a nonzero result for missing or invalid cache state.
 presence/size as verified, following cache symlinks, silently repairing invalid
 files, enabling unqualified GPU bundles, or claiming the archive is executable
 before safe extraction and a load/generation probe are implemented.
+
+## ADR-019: Resumable, locked, no-clobber asset publication
+
+**Decision:** Require explicit consent before creating cache state or connecting.
+Download only a built-in immutable asset URL through allowlisted HTTPS redirect
+families with proxy use disabled. Keep bytes in a restrictive, versioned
+`.partial` sibling; hash existing bytes before requesting an exact range; reject
+inconsistent status/range/length or excess bytes; and retain failures for
+resume. Serialize writers with an OS file lock. After exact size and SHA-256
+verification plus file sync, publish with a same-directory hard link that fails
+if the final path exists, then remove the partial. `--restart` may delete only
+the identified managed partial. Downloading never extracts or executes an
+artifact.
+
+**Why:** Multi-gigabyte artifacts need reliable resume and cancellation, while
+runtime/model supply-chain data must fail closed. Rename-over-existing semantics
+differ by platform and could replace a valid or user-owned final; no-clobber
+link publication makes that race explicit. Persistent lock files are harmless,
+while kernel-held locks release after crashes and avoid stale-lock deletion
+races.
+
+**Rejected:** Implicit first-run downloads, arbitrary user-supplied asset URLs,
+ambient HTTP proxies, appending after a server ignores `Range`, deleting partials
+on ordinary failure/cancellation, filename/size-only trust, overwriting invalid
+finals, extracting archives in the downloader, and executing immediately after
+download.
+
+## ADR-020: Bounded extraction with a link-free inventoried runtime tree
+
+**Decision:** Reopen and rehash the immutable archive before extraction. Parse
+tar.gz and ZIP in-process with strict entry/path/expanded-size limits and private
+same-filesystem staging. Reject duplicate, absolute, traversal, hard-link,
+encrypted, device, FIFO, sparse, and otherwise unsupported entries. Because the
+official macOS/Linux bundles contain relative shared-library symlinks, accept
+only links whose portable relative targets resolve to regular files within the
+same extracted inventory, then materialize their bytes into regular files.
+Record every installed file's path, size, and SHA-256 in a bounded private
+inventory; require the expected server file; verify staging before publication;
+and never overwrite an existing invalid runtime directory. Installation does
+not execute or probe the runtime.
+
+**Why:** Blind library extraction APIs can permit traversal, link escapes,
+special files, decompression bombs, or silent duplicates. Rejecting every
+symlink would also reject all four pinned official Unix bundles. Safe
+materialization preserves the loader-visible filenames without retaining link
+semantics, while the inventory gives later inspection and launch code a closed,
+tamper-evident set to revalidate.
+
+**Rejected:** Shelling out to `tar`/`unzip`, using archive-library convenience
+unpack methods, preserving symlinks, accepting hard links or special files,
+trusting the archive checksum without inventorying output, overwriting damaged
+installs, broad recursive cleanup of unknown paths, and launching immediately
+after extraction.
