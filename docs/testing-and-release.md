@@ -208,12 +208,32 @@ The exact pinned Linux x86-64 archive also passed an isolated model-free CLI
 probe. These tests do not load a GGUF, qualify GPU or memory, exercise native
 macOS/Windows behavior, or establish local inference quality.
 
-The subsequent M4 model-probe tests use a tiny synthetic protocol fixture and
-mock `llama-server`, not a real GGUF. They cover consent and missing/invalid
+The regular M4 model-probe tests use a tiny synthetic protocol fixture and
+mock `llama-server`. They cover consent and missing/invalid
 model rejection before execution, blocked/experimental/incomplete hardware
 states, a post-version revalidation barrier, exact alias/path/build/auth
 checks, bounded fixed generation, load timeout, stalled-generation
 cancellation, and child reaping. The CLI test checks consent and missing-model
-refusal without creating asset state. Real pinned Lite/Pro loads, peak RSS,
-8K/16K contexts, CPU/GPU target matrix, model quality, and local chat remain
-unverified release gates.
+refusal without creating asset state.
+
+An opt-in Linux x86-64 integration test uses the actual pinned `b10809`
+`llama-server` and a separately downloaded, Apache-2.0
+[`SmolLM2-135M-Instruct` Q4_K_M GGUF](https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/tree/09816acd5d99df7be770d85ea30822623dab342c).
+The file is 105,454,432 bytes with SHA-256
+`2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d`.
+Download it into an isolated `DOCILER_REAL_GGUF_TEST_ROOT` at
+`data/models/manifest-v1/real-smollm2/SmolLM2-135M-Instruct-Q4_K_M.gguf`;
+place and install the pinned runtime archive under that same root using
+`DOCILER_DATA_DIR=<root>/data dociler model runtime-install --confirm`.
+Run `DOCILER_REAL_GGUF_TEST_ROOT=<root> cargo test -p dociler-core
+real_smollm2_fixture_loads_and_generates --locked -- --ignored` on a host
+that permits private loopback binding. The test verifies fixture SHA-256 and
+full runtime inventory before execution, repeats both before model spawn,
+checks the exact alias/path/build/auth contract, makes one bounded generation
+request, and reaps the child. It is a protocol fixture only, never a Dociler
+Lite/Pro profile or quality substitute. Do not commit the GGUF or runtime.
+
+The pinned Linux x86-64 runtime passed this opt-in test on 2026-09-23. Real
+pinned Lite/Pro loads, process-group peak RSS, 8K/16K contexts, CPU/GPU target
+matrix, signal cancellation, model quality, and local chat remain unverified
+release gates.

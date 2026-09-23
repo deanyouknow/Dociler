@@ -734,4 +734,49 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         assert!(start.elapsed() < Duration::from_secs(4));
         stalled.assert_reaped();
     }
+
+    /// Opt-in protocol check against the real pinned binary and a small,
+    /// independently licensed GGUF. This is not Lite hardware/quality admission.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    #[ignore = "requires the pinned Linux runtime and a separately downloaded 105 MB GGUF fixture"]
+    fn real_smollm2_fixture_loads_and_generates() {
+        let root = std::env::var_os("DOCILER_REAL_GGUF_TEST_ROOT")
+            .expect("set DOCILER_REAL_GGUF_TEST_ROOT to the isolated fixture directory");
+        let root = Path::new(&root);
+        let paths =
+            AppPaths::new(root.join("config"), root.join("data"), root.join("cache")).unwrap();
+        let fixture = AssetSpec::test_fixture(
+            AssetKind::Model,
+            "real-smollm2",
+            "SmolLM2-135M-Instruct-Q4_K_M.gguf",
+            105_454_432,
+            "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d",
+        );
+        verify_model(&paths, fixture).expect("real GGUF fixture must pass SHA-256 verification");
+        let runtime = crate::assets::runtime_asset_for("linux", "x86_64").unwrap();
+        let installed = inspect_installed_runtime(&paths, *runtime, VerificationLevel::Sha256);
+        assert_eq!(installed.state(), RuntimeInstallState::Verified);
+        let report = run_model_probe(
+            installed.server_path(),
+            installed.path(),
+            &fixture.cache_path(&paths),
+            LocalProfile::Lite,
+            || {
+                verify_model(&paths, fixture)?;
+                if inspect_installed_runtime(&paths, *runtime, VerificationLevel::Sha256).state()
+                    != RuntimeInstallState::Verified
+                {
+                    return Err(ModelProbeError::RuntimeInvalid);
+                }
+                Ok(())
+            },
+            &CancellationToken::new(),
+            LOAD_TIMEOUT,
+        )
+        .expect("the pinned server must load and generate with the real tiny fixture");
+        assert_eq!(report.context_tokens, DIAGNOSTIC_CONTEXT);
+        assert!(report.startup_ms < LOAD_TIMEOUT.as_millis());
+        assert!(report.generation_ms < GENERATION_TIMEOUT.as_millis());
+    }
 }

@@ -239,9 +239,13 @@ rejection, exactly the selected alias, the selected model path, and pinned
 build metadata, then sends one fixed non-thinking request capped at 16 output
 tokens. Generation response bytes are bounded in memory and never displayed.
 The process is killed and reaped on the normal and error paths, or shutdown
-failure is reported; no backend preference is persisted. Mock tests use a tiny
-synthetic protocol fixture, not real model weights. A real Lite/Pro load has
-**not** yet been run or measured. Success would prove only a small diagnostic
+failure is reported; no backend preference is persisted. Regular tests use a
+tiny synthetic protocol fixture; an opt-in Linux x86-64 test has also passed
+with a verified 105 MB SmolLM2 GGUF and the exact pinned runtime (fixture pin
+and reproduction steps are in [testing and release](testing-and-release.md)).
+This validates the basic server flags and response contract, not profile
+admission: the fixture is neither Qwen3.5 nor a supported public alias. A real
+Lite/Pro load has **not** yet been run or measured. Success would prove only a small diagnostic
 load/generation, not the 8K/16K context, RSS, quality,
 acceleration, or document gates required for local chat/release.
 
