@@ -320,3 +320,28 @@ unpack methods, preserving symlinks, accepting hard links or special files,
 trusting the archive checksum without inventorying output, overwriting damaged
 installs, broad recursive cleanup of unknown paths, and launching immediately
 after extraction.
+
+## ADR-021: Ephemeral authenticated no-model runtime probe
+
+**Decision:** Require explicit execution consent and a fresh full installed-file
+inventory check before spawning the pinned `llama-server`. Probe its exact build
+first, then run it only as a no-model router on a random loopback port with a
+cryptographically random key file, empty private model/cache directories,
+cleared ambient environment, one future inference slot, conservative threads,
+disabled UI/autoload, and bounded in-memory diagnostics. Require public health,
+unauthenticated rejection, an authenticated empty model list, and pinned
+router build/state. Kill and reap the child on every outcome. Do not persist a
+backend choice or expose the child port through Dociler's public contract.
+
+**Why:** Safe extraction is not evidence that a platform binary runs or that
+its internal HTTP surface enforces authentication. A model-free probe isolates
+the lifecycle/transport boundary from multi-gigabyte model load, while making
+the later load/generation admission gate explicit. The OS-selected port has a
+small reservation-to-bind race; a private key challenge and exact response
+checks mitigate, but do not erase, same-user attack assumptions.
+
+**Rejected:** Launching as an implicit side effect of install/list/doctor,
+using a known port, inheriting model/provider/proxy environment, putting the key
+in command-line arguments, treating `/health` alone as sufficient, retaining a
+background process after a diagnostic, or declaring local inference ready from
+this probe.

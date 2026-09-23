@@ -199,3 +199,11 @@ the real pinned Linux x86-64 archive in an isolated temporary data directory,
 verified its checksum, installed and reverified 60 files/69,015,606 bytes, and
 confirmed the tree had no symlinks; no runtime executable was launched. Other
 native platforms and hostile decompression stress corpora remain release gates.
+
+The next M4 probe tests cover consent and full-inventory rejection before any
+execution, a successful model-free authenticated loopback start/stop, bounded
+diagnostic capture under a large output burst, cancellation and timeout with
+child reaping, authentication failure, version mismatch, and invalid health.
+The exact pinned Linux x86-64 archive also passed an isolated model-free CLI
+probe. These tests do not load a GGUF, qualify GPU or memory, exercise native
+macOS/Windows behavior, or establish local inference quality.

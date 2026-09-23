@@ -77,8 +77,8 @@ through `model list`, and explicit checksum verification through `model verify
 command downloads the current-platform runtime archive followed by the selected
 model, resumes a managed partial by default, and publishes only after exact size
 and SHA-256 verification. `--restart` explicitly discards only that managed
-partial. Repair/removal, runtime probes, progress inside the TUI, and the TUI
-local choice remain pending. A profile-free launch therefore still
+partial. Repair/removal, progress inside the TUI, and the TUI local choice
+remain pending. A profile-free launch therefore still
 proceeds directly to remote setup; Escape cancels without saving.
 
 After a runtime archive is cached, `model runtime-install --confirm` performs
@@ -86,6 +86,14 @@ bounded private extraction and shows the resulting inventory size and
 `llama-server` path. The command never runs that executable. `model list` shows
 the installed-tree metadata state, while `model verify` performs full per-file
 inventory checks when an installed tree exists.
+
+`model runtime-probe --confirm` then rehashes that installed tree and briefly
+starts the pinned server as an empty, authenticated loopback router. It checks
+the build, health, key enforcement, and absence of loaded models before stopping
+the child. No model file is needed or read. This is a one-shot diagnostic, not
+a local chat selection or a persistent service; its internal port/key and raw
+diagnostics are not shown. Without `--confirm`, it creates no state and starts
+no process.
 
 ### Backend choice
 

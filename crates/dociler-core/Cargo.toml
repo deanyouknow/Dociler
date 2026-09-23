@@ -13,6 +13,7 @@ directories.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
 fs2.workspace = true
+getrandom.workspace = true
 keyring.workspace = true
 libc.workspace = true
 reqwest.workspace = true

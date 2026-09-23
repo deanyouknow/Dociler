@@ -272,6 +272,26 @@ fn runtime_install_requires_consent_before_creating_state() {
 }
 
 #[test]
+fn runtime_probe_requires_consent_and_an_installed_runtime() {
+    let workspace = Workspace::new();
+    let denied = workspace.run(&["model", "runtime-probe"]);
+    assert_eq!(denied.status.code(), Some(1));
+    assert!(denied.stdout.is_empty());
+    let error = String::from_utf8(denied.stderr).unwrap();
+    assert!(error.contains("explicit consent"));
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+
+    let missing = workspace.run(&["model", "runtime-probe", "--confirm"]);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(
+        String::from_utf8(missing.stderr)
+            .unwrap()
+            .contains("not installed")
+    );
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+}
+
+#[test]
 fn diagnostics_reject_a_file_as_workspace() {
     let workspace = Workspace::new();
     let file = workspace.0.join("input.txt");

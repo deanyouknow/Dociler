@@ -1,18 +1,19 @@
 # Project Checkpoint
 
-Last updated: 2026-09-21T00:59:59Z
+Last updated: 2026-09-23T01:07:27Z
 
 ## Current status
 
 **Status:** M3 remote text flow plus M4 hardware/preflight, pinned asset/cache
-verification, consent-gated downloads, and safe inventoried runtime extraction
-are locally implemented and verified; native cross-platform validation, runtime
-probing/execution, and local inference remain pending.
+verification, consent-gated downloads, safe inventoried runtime extraction,
+and an explicit model-free runtime probe are locally implemented and verified.
+Native cross-platform validation, model loading, and local inference remain
+pending.
 
 **Active milestone:** M4 — Hardware admission, verified local asset management,
 and runtime integration (inventory/preflight, manifest/cache verification,
-download/publication, and safe extraction complete locally; runtime probe and
-inference pending).
+download/publication, safe extraction, and model-free probe complete locally;
+model-load/generation admission and inference pending).
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
 `dociler` executable with help, version, workspace/platform diagnostics, config
@@ -34,9 +35,11 @@ and explicit consent before an existing key is sent to a changed origin. It has
 an immutable model/runtime manifest, can list or SHA-256-verify existing cache
 files without mutation, and can explicitly download the pinned platform runtime
 plus Lite/Pro model with resumable staging and verified no-clobber publication.
-It can reverify, safely extract, inventory, and inspect the pinned runtime
-without executing it. It has no local-backend onboarding, runtime probing/
-execution, document parsing, settings/grant update UI, or Dociler API yet. The
+It can reverify, safely extract, inventory, and inspect the pinned runtime. An
+explicit probe now rehashes the install, briefly starts its model-free router
+on authenticated loopback, checks health/build/authentication, and stops it.
+It has no local model loading, local-backend onboarding, document parsing,
+settings/grant update UI, or Dociler API yet. The
 five-platform CI workflow is defined; its hosted result
 could not be retrieved from this environment.
 
@@ -164,32 +167,43 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
   nine tests, bringing the Linux suite to 92. Verified all five official archive
   checksums/layouts and installed the Linux x86-64 archive in isolated temporary
   state without launching it.
+- Added consent-gated `model runtime-probe --confirm` with full installed-file
+  rehash before execution and again between version check and listening spawn.
+  It starts only the pinned model-free router on authenticated random loopback,
+  verifies health, key enforcement, empty model list, and build/state, then kills
+  and reaps it. Diagnostics are bounded and ephemeral; no GGUF is loaded.
+- Added five Linux core probe tests and a CLI consent test, bringing the local
+  suite to 98. The exact pinned Linux x86-64 archive passed a real isolated
+  model-free probe. Added ADR-021 and updated user/developer/runtime/privacy
+  documentation.
 
 ## Work in progress
 
-No implementation unit is currently in progress. M1–M4 hosted/native execution
+No implementation unit is currently in progress. This probe unit started from
+a clean tree with no overlapping user changes. M1–M4 hosted/native execution
 remains unverified outside this Linux x86-64 environment.
 
 ## Next recommended task
 
-Continue M4 with a bounded local runtime controller and probe: reverify the
-installed inventory immediately before launch, generate an internal secret,
-spawn only the inventoried `llama-server` on a random loopback port with one
-inference slot and conservative threads, capture bounded diagnostics, verify
-health/version, then terminate and cleanly reap it. Do not load a multi-gigabyte
-model or enable chat until the probe lifecycle and cancellation tests pass. Keep
-removal/repair UI, CLI signal wiring, and TUI local selection as later units.
-Validate M3/M4 on hosted target platforms when access is available.
+Continue M4 with a bounded model-load/generation admission controller. Rehash
+the selected GGUF and runtime inventory, repeat live hardware preflight, launch
+only the pinned runtime with a private key and conservative Lite settings, and
+verify bounded generation/cancellation with a small permitted test fixture
+before admitting real Lite/Pro weights. Keep local chat disabled until these
+checks and memory-quality gates pass. The compiled per-file/CPU-instruction
+release manifest, CLI signal wiring, TUI local selection, removal/repair UI,
+and hosted native platform validation remain separate required units.
 Implementation remains authorized.
 
 ## Blockers
 
 None.
 
-Environment note: Rust was absent, so verification used isolated development
-tools at `/tmp/dociler-cargo` and `/tmp/dociler-rustup`. They are temporary,
-outside the repository, and were not added to shell startup files. Use the normal
-rustup setup described in `docs/development.md` on other machines.
+Environment note: Rust was absent from the default PATH. Verification used the
+Rust 1.85.1 toolchain and an isolated `/tmp/dociler-cargo` cache; a prior
+temporary rustup cache disappeared between turns. These were not added to the
+repository or shell startup files. Use the normal rustup setup described in
+`docs/development.md` on other machines.
 
 ## Decisions in force
 
@@ -257,8 +271,40 @@ rustup setup described in `docs/development.md` on other machines.
   duplicates, hard links, special/encrypted/oversized entries; materialize only
   validated in-root official library links as regular files; inventory every
   path/size/hash; verify before publication; and never execute during install.
+- ADR-021: require explicit consent, full installed-file rehash before version
+  and again before listening spawn, a private random key, loopback-only
+  model-free router, exact health/auth/build/state checks, bounded diagnostics,
+  and kill/reap on every result. This is not model or inference admission.
 
 ## Verification
+
+### M4 authenticated model-free runtime probe — 2026-09-23
+
+Local checks used Rust 1.85.1 and isolated Cargo state. A temporary official
+Linux x86-64 archive matched its pinned SHA-256, was installed into an isolated
+data directory, and passed the real model-free probe twice (pinned `b10809`,
+health/auth/build checks). The temporary state did not persist. No GGUF was
+downloaded or loaded, and no server remained after the probe.
+
+- **passed:** `cargo test --workspace --locked --offline` and the optimized
+  `cargo test --workspace --release --locked`: 98 tests (13 terminal, 16 CLI,
+  53 core unit, 11 foundation, 5 remote integration), plus empty doctest suite.
+- **passed:** strict all-target Clippy and `cargo fmt --all -- --check` before
+  the session restart; no Rust source changed afterward. Release build,
+  consent-refusal smoke, release PTY onboarding/chat/cancellation/resize,
+  `python3 scripts/check_docs.py` (16 files, 27 links), and `git diff --check`
+  passed in the resumed session.
+- **passed:** mock consent and tamper-before-execution, tamper between version
+  and spawn, healthy/authenticated start/stop, bounded flood diagnostics,
+  timeout/cancellation reaping, and fail-closed version/build/health/early-exit
+  cases; real isolated Linux x86-64 model-free launch and termination.
+- **failed then resolved:** temporary Cargo cache loss prevented the first
+  offline optimized rerun; fetching locked crates restored it. Sandboxed
+  loopback denial prevented the first release PTY rerun; the authorized
+  loopback retry passed.
+- **not run:** real GGUF loading/generation, memory/GPU qualification, CLI
+  signal cancellation, native macOS/Windows/Linux ARM64 runtime probes, hosted
+  CI, model-quality gates, document analysis, or Dociler API.
 
 ### M4 safe runtime extraction and inventory — 2026-09-21
 
@@ -668,3 +714,5 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-21T00:40:06Z | Codex `/root` | Complete M4 consent-gated download integration | Added immutable-source/proxy-free downloads, exact range resume, process locks, restrictive retained partials, size/hash verification, no-clobber publication, explicit restart, CLI command/progress/errors, tests, docs, and ADR-019; resolves 00:22 entry | Cargo manifests/lock, core asset/download services, CLI/tests, README, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: fmt, strict Clippy, 83 debug and optimized tests, doctests/docs, release PTY, Markdown/diff; failed then resolved: sandbox DNS, Rust-1.85 syntax, helper lint; not run: real assets/public redirects/native platforms/extraction/execution/later gates | COMPLETE; M4 ASSET DOWNLOAD ACTIVE | Add safe bounded runtime archive extraction/content inventory without executing it |
 | 2026-09-21T00:42:53Z | Codex `/root` | Continue M4 safe runtime extraction | Add bounded archive parsing, hostile-entry rejection, private staging, expected `llama-server` inventory validation, no-clobber runtime-directory publication, CLI status/install surface, synthetic tests, docs, and handoff; preserve existing uncommitted M4 work | Core runtime extraction/inventory service, CLI/tests, Cargo dependencies, README/docs, CHECKPOINT.md | not run: extraction checks pending | IN PROGRESS | Complete without executing/probing any runtime, loading a model, or enabling local inference |
 | 2026-09-21T00:59:59Z | Codex `/root` | Complete M4 safe runtime extraction | Added reverified bounded tar.gz/ZIP extraction, private staging, portable hostile-entry rejection, safe library-link materialization, per-file inventory/full inspection, required server validation, no-overwrite publication, CLI install/status, tests, docs, and ADR-020; resolves 00:42 entry | Cargo manifests/lock, core asset/runtime-install services, CLI/tests, README, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: five official checksums/layouts, real Linux archive install/verify without execution, fmt, strict Clippy, 92 debug/optimized tests, docs, release PTY, Markdown/diff; failed then resolved: sandbox DNS and stale smoke binary; not run: server execution/model loading/native non-Linux/stress/hosted gates | COMPLETE; M4 VERIFIED RUNTIME INSTALL ACTIVE | Add an inventory-revalidating, loopback-only, bounded runtime spawn/health/termination probe without loading a model |
+| 2026-09-23T00:39:58Z | Codex `/root` | Continue M4 bounded local runtime probe | Starting clean tree; implement reverified loopback-only no-model child launch, private key, bounded diagnostics, health/version validation, cancellation, cleanup, CLI surface, tests and handoff | Core runtime controller, CLI/tests, README/docs, CHECKPOINT.md | not run: probe implementation checks pending | IN PROGRESS | Complete lifecycle/cancellation tests without model loading or local chat |
+| 2026-09-23T01:07:27Z | Codex `/root` | Complete M4 model-free runtime probe | Added consent-gated inventory-rehashing pinned-runtime probe, private authenticated loopback router, bounded diagnostics, lifecycle/cancellation cleanup, CLI command, Linux mock tests, docs and ADR-021; resolves 00:39 entry | Cargo manifests/lock, core runtime probe/module, CLI/tests, README, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: 98 debug and optimized tests, fmt/strict Clippy before restart, release build, real isolated pinned Linux probe, release PTY, Markdown/diff; failed then resolved: lost temporary Cargo cache and sandboxed loopback PTY; not run: GGUF load/generation, non-Linux native/hosted, signal, quality gates | COMPLETE; M4 INFERENCE INTEGRATION PENDING | Implement bounded model-load/generation admission with rehash, live preflight, private key, cancellation, and a small permitted fixture before local chat |

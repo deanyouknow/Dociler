@@ -26,6 +26,9 @@ use dociler_core::runtime_install::{
     RuntimeInstallError, RuntimeInstallOptions, RuntimeInstallOutcome, RuntimeInstallState,
     inspect_installed_runtime, install_cached_runtime,
 };
+use dociler_core::runtime_probe::{
+    RuntimeProbeError, RuntimeProbeOptions, probe_installed_runtime,
+};
 use dociler_core::session::{Role, Session};
 use dociler_core::workspace::{Workspace, WritePolicy};
 
@@ -49,6 +52,8 @@ Commands:
                 Download the pinned runtime and model; resume partial files by default
   model runtime-install --confirm
                 Safely extract and inventory the verified pinned runtime (never execute it)
+  model runtime-probe --confirm
+                Reverify, start a model-free loopback runtime, check health/auth/version, then stop it
   connect list  List saved remote profiles (never credentials)
   connect verify URL MODEL
                 Verify an endpoint without saving it
@@ -95,6 +100,9 @@ enum Command {
         restart_partial: bool,
     },
     ModelRuntimeInstall {
+        confirmed: bool,
+    },
+    ModelRuntimeProbe {
         confirmed: bool,
     },
     ConnectList,
@@ -198,6 +206,14 @@ fn parse(args: &[OsString]) -> Option<Command> {
             if command == "model" && action == "runtime-install" && flag == "--confirm" =>
         {
             Some(Command::ModelRuntimeInstall { confirmed: true })
+        }
+        [command, action] if command == "model" && action == "runtime-probe" => {
+            Some(Command::ModelRuntimeProbe { confirmed: false })
+        }
+        [command, action, flag]
+            if command == "model" && action == "runtime-probe" && flag == "--confirm" =>
+        {
+            Some(Command::ModelRuntimeProbe { confirmed: true })
         }
         [command, action] if command == "connect" && action == "list" => Some(Command::ConnectList),
         [command, action, url, model] if command == "connect" && action == "verify" => {
@@ -305,6 +321,7 @@ enum CommandError {
     AssetVerification,
     AssetDownload(DownloadError),
     RuntimeInstall(RuntimeInstallError),
+    RuntimeProbe(RuntimeProbeError),
     Remote(RemoteError),
     Terminal,
 }
@@ -875,6 +892,43 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 "The runtime was not launched or probed; local inference remains disabled."
             )?;
         }
+        Command::ModelRuntimeProbe { confirmed } => {
+            if !confirmed {
+                return Err(CommandError::Usage(
+                    "runtime probe executes a local process and requires explicit consent: dociler model runtime-probe --confirm",
+                ));
+            }
+            let app_paths = paths()?;
+            let runtime = current_runtime_asset().ok_or(CommandError::Usage(
+                "no pinned llama.cpp runtime exists for this platform; use Remote mode",
+            ))?;
+            writeln!(
+                output,
+                "Reverifying the pinned runtime before a model-free loopback probe. No GGUF will be loaded."
+            )?;
+            output.flush()?;
+            let report = probe_installed_runtime(
+                &app_paths,
+                *runtime,
+                RuntimeProbeOptions::confirmed(),
+                &CancellationToken::new(),
+            )
+            .map_err(CommandError::RuntimeProbe)?;
+            writeln!(
+                output,
+                "Runtime probe passed: {} health/auth/version; startup and shutdown in {} ms.",
+                report.build, report.startup_ms
+            )?;
+            writeln!(
+                output,
+                "Captured {} diagnostic bytes in memory (at most {} retained); no server remains running.",
+                report.diagnostic_bytes_seen, report.diagnostic_bytes_retained
+            )?;
+            writeln!(
+                output,
+                "Model loading, local chat, and the Dociler API remain disabled."
+            )?;
+        }
         Command::ConnectList => {
             let loaded = settings()?;
             if loaded.settings.remote_profiles().is_empty() {
@@ -1214,6 +1268,47 @@ fn main() -> ExitCode {
                     }
                     RuntimeInstallError::Io(_) => {
                         "runtime installation I/O failed; check ownership, permissions, and free space."
+                    }
+                },
+                CommandError::RuntimeProbe(error) => match error {
+                    RuntimeProbeError::ConsentRequired => {
+                        "runtime execution requires explicit --confirm consent."
+                    }
+                    RuntimeProbeError::InstallMissing => {
+                        "the pinned runtime is not installed; run 'dociler model runtime-install --confirm' first."
+                    }
+                    RuntimeProbeError::InstallInvalid => {
+                        "the installed runtime failed full inventory verification; nothing was executed."
+                    }
+                    RuntimeProbeError::Cancelled => {
+                        "runtime probe was cancelled and its child stopped."
+                    }
+                    RuntimeProbeError::Randomness => {
+                        "could not generate a private internal API key; nothing was started."
+                    }
+                    RuntimeProbeError::Spawn => {
+                        "could not start the verified runtime; check platform compatibility and local execution policy."
+                    }
+                    RuntimeProbeError::VersionMismatch => {
+                        "the runtime did not report the pinned llama.cpp build; its child was stopped."
+                    }
+                    RuntimeProbeError::ProcessExited => {
+                        "the runtime exited before the probe completed; no server remains running."
+                    }
+                    RuntimeProbeError::TimedOut => {
+                        "the runtime probe timed out; its child was stopped."
+                    }
+                    RuntimeProbeError::InvalidResponse => {
+                        "the runtime did not return the expected model-free loopback health response; its child was stopped."
+                    }
+                    RuntimeProbeError::AuthenticationFailed => {
+                        "the runtime did not enforce its internal API key; its child was stopped."
+                    }
+                    RuntimeProbeError::StopFailed => {
+                        "runtime shutdown could not be confirmed; inspect local processes before retrying."
+                    }
+                    RuntimeProbeError::Io(_) => {
+                        "runtime probe I/O failed; inspect the private runtime installation and retry."
                     }
                 },
                 CommandError::Remote(error) => match error {

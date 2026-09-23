@@ -15,5 +15,6 @@ pub mod paths;
 pub mod profiles;
 pub mod remote;
 pub mod runtime_install;
+pub mod runtime_probe;
 pub mod session;
 pub mod workspace;

@@ -183,9 +183,9 @@ mutation, accepts only the built-in HTTPS origin/redirect families, disables
 proxies, locks each asset, validates range metadata before appending, caps bytes
 at the manifest size, and publishes a verified partial without replacing an
 existing final path. Cancellation drops a stalled body request and preserves
-the partial. This is not execution authorization: signed external update
-metadata, execution-time revalidation, process isolation, and runtime probing
-remain required before local inference can run.
+the partial. This is not model-load or inference authorization: signed external
+update metadata, execution-time revalidation, process isolation, and runtime
+probing remain required before local inference can run.
 
 The extraction layer now rehashes the archive immediately before reading it,
 uses a private same-filesystem staging directory, and never delegates parsing to
@@ -193,9 +193,22 @@ shell archive tools. It rejects unsafe/special entries and decompression limits,
 materializes only validated in-root library links as regular files, records
 per-file size/SHA-256 inventory, and refuses to replace an invalid installed
 tree. Full verification rejects altered, missing, extra, linked, or non-regular
-outputs. The runtime is still not authorized for execution: a later launch path
-must perform final inventory verification, apply process/network limits, and
-pass a bounded health/generation probe before selection.
+outputs. Extraction alone does not authorize model loading or inference: that
+later path must perform final inventory verification, apply process/network
+limits, and pass bounded health and generation probes before selection.
+
+The explicit `model runtime-probe --confirm` path now rehashes every inventoried
+file immediately before executing only `llama-server`. It launches a model-free
+router with empty private model/cache directories, a cryptographically random
+key in a 0600 temporary file on Unix, a random `127.0.0.1` port, no Web UI, no
+autoload, and no inherited environment. It proves health, authentication,
+empty models, and pinned build; raw output is held only in an 8 KiB in-memory
+ring. The process is terminated and reaped on success, cancellation, timeout,
+or validation failure. The current command is not a model-load or network
+sandbox: a compromised verified binary, same-user filesystem race, or local
+process able to read same-user private files remains outside its guarantees.
+CLI signal cancellation and native non-Linux process behavior still need
+validation.
 
 ## Threat boundary
 

@@ -14,9 +14,10 @@ health checks, verified endpoint/model editing, and visible reconnect state.
 M4 includes read-only RAM/CPU/disk inventory, conservative Lite/Pro preflight
 reporting, and a built-in pinned manifest with cache presence and SHA-256
 verification, plus a consent-gated resumable asset downloader with no-clobber
-publication and bounded runtime archive extraction with per-file inventory.
-Local onboarding, runtime probing/inference, document processing, and serving
-remain future work. See
+publication, bounded runtime archive extraction with per-file inventory, and
+an explicit no-model runtime health/auth/version lifecycle probe. Local
+onboarding, model loading/inference, document processing, and serving remain
+future work. See
 [Configuration](configuration.md) and
 [Remote providers](remote-providers.md) for commands and boundaries.
 
@@ -28,7 +29,8 @@ Futures Util 0.3.34 and Tokio 1.53.1 support cancellable remote I/O without a
 process-global runtime. fs2 0.4.3 provides cross-platform advisory asset locks;
 libc 0.2.189 is used only for Unix no-follow file opens. flate2 1.1.2 (Rust
 backend), tar 0.4.44, and ZIP 2.4.2 (Deflate only) provide in-process bounded
-runtime archive parsing.
+runtime archive parsing. getrandom 0.3.4 supplies the ephemeral internal probe
+key from the OS random source.
 The lockfile pins transitives. These
 are deliberate Rust-1.85-compatible baseline pins, not claims to be the latest
 releases. Dependency vulnerability/license audits remain release work.
@@ -62,6 +64,7 @@ cargo run --locked -- model list
 cargo run --locked -- model verify dociler-lite
 cargo run --locked -- model download dociler-lite --confirm
 cargo run --locked -- model runtime-install --confirm
+cargo run --locked -- model runtime-probe --confirm
 cargo run --locked -- connect list
 cargo run --locked -- connect check PROFILE
 cargo run --locked -- connect edit PROFILE URL MODEL
@@ -118,6 +121,14 @@ current-platform archive, creates a per-file inventory, and publishes a private
 versioned runtime directory. It does not run or probe `llama-server`. `model
 list` reports metadata state for that directory; `model verify` additionally
 rehashes inventoried runtime files when an install exists.
+
+`model runtime-probe --confirm` rehashes all installed runtime files and then
+executes only the pinned server, without a GGUF, in a private model-free
+loopback router. It verifies the server build, health, authentication, empty
+model list, and router state, then kills and reaps it. This is a short diagnostic
+only. It does not persist a preferred backend, enable local chat, or expose the
+internal port/key. The command does not yet wire keyboard/signal cancellation;
+the shared service accepts a cancellation token for future TUI integration.
 
 ## Workspace boundaries
 

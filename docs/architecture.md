@@ -230,8 +230,14 @@ installed tree. It records each file's path, size, and SHA-256 in a bounded
 inventory, verifies the complete staging tree, then publishes a versioned
 runtime directory without replacing an existing invalid install. Inspection can
 perform metadata-only or full per-file verification. No code is launched during
-installation. Accelerator discovery/selection, runtime probing,
-`llama-server` lifecycle, and local inference remain unimplemented.
+installation. The new `runtime_probe` service rehashes that inventory before
+each explicit probe, generates an ephemeral internal key, starts only the
+inventoried executable with an empty model cache/directory on a random
+loopback port, and validates pinned version, health, key enforcement, and
+no-model router state. Its child guard always attempts kill/reap on exit, while
+the normal path confirms shutdown. Raw output is bounded in memory and not
+surfaced by the CLI. This is a lifecycle smoke check only: accelerator
+discovery/selection, real model load/generation, and local chat remain pending.
 
 ## Failure containment
 

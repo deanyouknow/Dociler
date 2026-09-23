@@ -30,10 +30,13 @@ Before runtime execution is enabled, the release manifest must additionally
 list extracted executable/shared-library inventory and supported CPU
 instructions. Never resolve `latest` during installation. Runtime upgrades
 require the full platform, model, memory, and API regression suite.
+The confirmed, short-lived diagnostic probe below is not release-enabled local
+inference; the compiled inventory and CPU-instruction release gate remains open.
 
-Only the archive metadata and read-only cache verifier are implemented. Archive
-content/layout validation, safe extraction, executable/library inventory,
-runtime probing, GPU packages beyond macOS Metal, and execution remain pending.
+Archive metadata, read-only cache verification, bounded extraction, installed
+file inventory, and a model-free runtime lifecycle probe are implemented. Model
+loading/generation, accelerator qualification, and GPU packages beyond macOS
+Metal remain pending.
 
 ## Primary model profiles
 
@@ -201,7 +204,28 @@ matched the existing manifest checksums, contained 51–61 archive entries, and
 expanded to roughly 26–47 MB before safe-link materialization. The Linux x86-64
 archive was also installed end-to-end into an isolated temporary data directory,
 producing 60 inventoried files and 69,015,606 bytes after link materialization.
-It was not executed.
+The initial extraction verification did not execute it. A later isolated
+Linux x86-64 smoke test ran the same pinned executable without a model and
+stopped it after its health/auth/version checks passed.
+
+`dociler model runtime-probe --confirm` is the only current runtime execution
+path. It rehashes every installed file immediately before launch, creates a
+private ephemeral API-key file and empty model/cache directories, runs the
+inventoried `llama-server` first with `--version`, rehashes again, then runs it
+in the [pinned build's no-model router mode](https://github.com/ggml-org/llama.cpp/blob/5266f24da75dc449bd56cbed7addb9c8e4a6a73e/tools/server/server.cpp) on
+an OS-selected loopback port. The child environment is cleared and rebuilt with
+only required local paths, removing ambient model, provider, and proxy settings.
+The router is configured for one future slot/model, at most four CPU threads
+while leaving one logical CPU responsive where possible, one HTTP thread,
+disabled UI/slots/autoload, and restrictive CORS. The probe requires HTTP
+health, a 401 from unauthenticated `/v1/models`, an empty authenticated model
+list, and `/props` reporting the pinned build and model-free router state.
+Output is drained into an 8 KiB in-memory diagnostic ring; raw diagnostics,
+port, and key are not printed or persisted. Cancellation, timeout, or any
+validation failure kills and reaps the child; success does the same. The port
+reservation-to-child-bind interval remains a local TOCTOU boundary, mitigated
+by the private key challenge and strict loopback response checks. This probe
+does not prove model fit, generation quality, GPU acceleration, or API safety.
 
 Display download source and license before consent. Support list, verify, remove,
 repair, and update operations without deleting unrelated cached assets. Removal
