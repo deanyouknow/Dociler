@@ -11,6 +11,7 @@ pub mod credentials;
 pub mod diagnostics;
 pub mod downloads;
 pub mod hardware;
+pub mod model_probe;
 pub mod paths;
 pub mod profiles;
 pub mod remote;

@@ -210,6 +210,17 @@ process able to read same-user private files remains outside its guarantees.
 CLI signal cancellation and native non-Linux process behavior still need
 validation.
 
+The model-load diagnostic adds explicit consent and repeats full pinned GGUF
+hashing, runtime inventory validation, and live hardware preflight before and
+after the version check. It refuses experimental Lite and blocked/incomplete
+hardware states, uses CPU-only bounded settings, and checks the single-model
+alias/path/build before a fixed tiny generation. It holds the answer only in a
+bounded in-memory response and does not print or save it. Cancellation and
+timeouts stop/reap the child. This is not a hardened process sandbox, a
+same-user filesystem-race solution, or permission to route user documents or
+chat through the local backend. CLI signal wiring and real-model memory
+measurement remain open.
+
 ## Threat boundary
 
 v1 protects against accidental remote disclosure, casual LAN access, path

@@ -95,6 +95,13 @@ a local chat selection or a persistent service; its internal port/key and raw
 diagnostics are not shown. Without `--confirm`, it creates no state and starts
 no process.
 
+`model load-probe PROFILE --confirm` is a separate one-shot diagnostic for a
+fully cached, checksum-verified GGUF and installed runtime. It repeats live
+hardware preflight, refuses the experimental Lite state, briefly loads the
+model on CPU at a 1,024-token context, performs a fixed tiny generation, and
+stops. It does not select the backend, show the generated text, or enable chat.
+The 8K/16K memory and quality gates still have to pass.
+
 ### Backend choice
 
 Use plain labels:
@@ -159,8 +166,10 @@ Only `/help`, `/status`, `/connect [NAME|add|refresh|check NAME|edit NAME|remove
 NAME|key NAME]`, confirmed `/clear`, and `/exit` are active in the current
 terminal surface. `dociler model status`, `model list`, and `model verify
 [PROFILE]` are available outside the TUI, as is the explicitly confirmed
-`model download PROFILE --confirm [--restart]`; the interactive `/model`
-workflow and the remaining rows are the approved target contract. The core
+`model download PROFILE --confirm [--restart]`, `model runtime-install --confirm`,
+`model runtime-probe --confirm`, and diagnostic-only
+`model load-probe PROFILE --confirm`; the interactive `/model` workflow and the
+remaining rows are the approved target contract. The core
 download transport is cooperatively cancellable, while signal/keyboard wiring
 for this scriptable command remains a later CLI/TUI integration unit; abrupt
 termination safely leaves the `.partial` file resumable.

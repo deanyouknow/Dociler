@@ -207,3 +207,13 @@ child reaping, authentication failure, version mismatch, and invalid health.
 The exact pinned Linux x86-64 archive also passed an isolated model-free CLI
 probe. These tests do not load a GGUF, qualify GPU or memory, exercise native
 macOS/Windows behavior, or establish local inference quality.
+
+The subsequent M4 model-probe tests use a tiny synthetic protocol fixture and
+mock `llama-server`, not a real GGUF. They cover consent and missing/invalid
+model rejection before execution, blocked/experimental/incomplete hardware
+states, a post-version revalidation barrier, exact alias/path/build/auth
+checks, bounded fixed generation, load timeout, stalled-generation
+cancellation, and child reaping. The CLI test checks consent and missing-model
+refusal without creating asset state. Real pinned Lite/Pro loads, peak RSS,
+8K/16K contexts, CPU/GPU target matrix, model quality, and local chat remain
+unverified release gates.

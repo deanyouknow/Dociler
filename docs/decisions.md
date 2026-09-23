@@ -345,3 +345,27 @@ using a known port, inheriting model/provider/proxy environment, putting the key
 in command-line arguments, treating `/health` alone as sufficient, retaining a
 background process after a diagnostic, or declaring local inference ready from
 this probe.
+
+## ADR-022: Diagnostic-only pinned model load before local chat
+
+**Decision:** Permit an explicitly confirmed, short-lived CPU-only model-load
+probe only after exact pinned GGUF hashing, full installed-runtime inventory
+validation, and fresh supported-tier hardware preflight. Repeat these checks
+after the server version check and before listening spawn. Use one model/slot,
+a 1,024-token context, small fixed batches, conservative threads, an internal
+key on random loopback, exact alias/path/build checks, and one bounded
+non-thinking generation. Attempt stop/reap on every result and report any
+unconfirmed shutdown; do not retain a backend selection or enable local chat
+from this diagnostic.
+
+**Why:** A model-free router probe does not test whether selected weights load
+or whether the pinned server can generate with them. A small diagnostic
+separates that protocol/lifecycle step from expensive full-context memory and
+quality qualification. Experimental 6–8 GB Lite is refused until it has a
+measured admission policy. The current fixture is a synthetic mock and does
+not claim real-GGUF validation.
+
+**Rejected:** Implicit model load during `doctor`/`model status`, trusting a
+prior cache hash or hardware snapshot, automatic GPU offload, exposing the raw
+server, persisting the probe process, printing test output, or treating a tiny
+generation as proof that 8K/16K contexts and RSS/quality gates pass.

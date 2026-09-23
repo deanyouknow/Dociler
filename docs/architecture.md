@@ -237,7 +237,19 @@ loopback port, and validates pinned version, health, key enforcement, and
 no-model router state. Its child guard always attempts kill/reap on exit, while
 the normal path confirms shutdown. Raw output is bounded in memory and not
 surfaced by the CLI. This is a lifecycle smoke check only: accelerator
-discovery/selection, real model load/generation, and local chat remain pending.
+discovery/selection, qualified full-context model load/generation, and local chat
+remain pending.
+
+The `model_probe` service is the next diagnostic layer. After explicit consent,
+it rehashes the pinned GGUF and installed runtime, evaluates a fresh hardware
+snapshot, checks the server version, then rehashes/rechecks again before a
+single-model spawn. The CPU-only child has one slot, a 1,024-token context,
+small fixed batches, private key, bounded output, and a random loopback port.
+Health, authentication, alias, model path, and build must agree before one
+fixed non-thinking generation. It attempts kill/reap on success, timeout,
+cancellation, or failure and reports failed shutdown. Neither its port nor
+generated content is returned to callers. This is not an admitted chat backend
+or an 8K/16K qualification.
 
 ## Failure containment
 

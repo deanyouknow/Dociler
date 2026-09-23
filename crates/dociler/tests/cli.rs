@@ -292,6 +292,29 @@ fn runtime_probe_requires_consent_and_an_installed_runtime() {
 }
 
 #[test]
+fn model_load_probe_requires_consent_and_verified_assets() {
+    let workspace = Workspace::new();
+    let denied = workspace.run(&["model", "load-probe", "dociler-lite"]);
+    assert_eq!(denied.status.code(), Some(1));
+    assert!(denied.stdout.is_empty());
+    assert!(
+        String::from_utf8(denied.stderr)
+            .unwrap()
+            .contains("explicit consent")
+    );
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+
+    let missing = workspace.run(&["model", "load-probe", "dociler-lite", "--confirm"]);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(
+        String::from_utf8(missing.stderr)
+            .unwrap()
+            .contains("GGUF is missing")
+    );
+    assert!(!workspace.0.join("data").exists());
+}
+
+#[test]
 fn diagnostics_reject_a_file_as_workspace() {
     let workspace = Workspace::new();
     let file = workspace.0.join("input.txt");

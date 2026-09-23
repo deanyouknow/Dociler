@@ -16,6 +16,7 @@ use dociler_core::downloads::{
 use dociler_core::hardware::{
     AcceleratorCandidate, HardwareInventory, MemoryScope, ModelPreflight, PreflightStatus,
 };
+use dociler_core::model_probe::{ModelProbeError, probe_cached_model};
 use dociler_core::paths::AppPaths;
 use dociler_core::profiles::{
     ProfileInstallError, ProfileMutationError, check_remote_profile, edit_remote_profile,
@@ -54,6 +55,8 @@ Commands:
                 Safely extract and inventory the verified pinned runtime (never execute it)
   model runtime-probe --confirm
                 Reverify, start a model-free loopback runtime, check health/auth/version, then stop it
+  model load-probe PROFILE --confirm
+                Reverify a pinned GGUF/runtime, test a small CPU generation, then stop it
   connect list  List saved remote profiles (never credentials)
   connect verify URL MODEL
                 Verify an endpoint without saving it
@@ -78,7 +81,7 @@ Options:
   -V, --version Show the build version
 
 Interactive and one-shot remote text chat are available through saved profiles.
-Document reading, local model loading, and the Dociler API server are not available yet.
+Document reading, persistent local model chat, and the Dociler API server are not available yet.
 ";
 
 enum Command {
@@ -103,6 +106,10 @@ enum Command {
         confirmed: bool,
     },
     ModelRuntimeProbe {
+        confirmed: bool,
+    },
+    ModelLoadProbe {
+        profile: LocalProfile,
         confirmed: bool,
     },
     ConnectList,
@@ -215,6 +222,20 @@ fn parse(args: &[OsString]) -> Option<Command> {
         {
             Some(Command::ModelRuntimeProbe { confirmed: true })
         }
+        [command, action, profile] if command == "model" && action == "load-probe" => {
+            Some(Command::ModelLoadProbe {
+                profile: parse_local_profile(profile)?,
+                confirmed: false,
+            })
+        }
+        [command, action, profile, flag]
+            if command == "model" && action == "load-probe" && flag == "--confirm" =>
+        {
+            Some(Command::ModelLoadProbe {
+                profile: parse_local_profile(profile)?,
+                confirmed: true,
+            })
+        }
         [command, action] if command == "connect" && action == "list" => Some(Command::ConnectList),
         [command, action, url, model] if command == "connect" && action == "verify" => {
             Some(Command::ConnectVerify {
@@ -322,6 +343,7 @@ enum CommandError {
     AssetDownload(DownloadError),
     RuntimeInstall(RuntimeInstallError),
     RuntimeProbe(RuntimeProbeError),
+    ModelProbe(ModelProbeError),
     Remote(RemoteError),
     Terminal,
 }
@@ -929,6 +951,48 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 "Model loading, local chat, and the Dociler API remain disabled."
             )?;
         }
+        Command::ModelLoadProbe { profile, confirmed } => {
+            if !confirmed {
+                return Err(CommandError::Usage(
+                    "model load probe executes a local model and requires explicit consent: dociler model load-probe PROFILE --confirm",
+                ));
+            }
+            let app_paths = paths()?;
+            let runtime = current_runtime_asset().ok_or(CommandError::Usage(
+                "no pinned llama.cpp runtime exists for this platform; use Remote mode",
+            ))?;
+            writeln!(
+                output,
+                "Reverifying {} and the pinned runtime; a diagnostic 1024-token-context CPU process will briefly run.",
+                profile.alias()
+            )?;
+            writeln!(
+                output,
+                "This does not qualify the full context, memory target, model quality, or local chat."
+            )?;
+            output.flush()?;
+            let report = probe_cached_model(
+                &app_paths,
+                *runtime,
+                profile,
+                true,
+                &CancellationToken::new(),
+            )
+            .map_err(CommandError::ModelProbe)?;
+            writeln!(
+                output,
+                "Model load probe passed for {} at {} tokens; health was ready in {} ms and generation took {} ms.",
+                report.profile.alias(),
+                report.context_tokens,
+                report.startup_ms,
+                report.generation_ms
+            )?;
+            writeln!(
+                output,
+                "Captured {} diagnostic bytes in memory; the process stopped. Local chat remains disabled.",
+                report.diagnostic_bytes_seen
+            )?;
+        }
         Command::ConnectList => {
             let loaded = settings()?;
             if loaded.settings.remote_profiles().is_empty() {
@@ -1309,6 +1373,39 @@ fn main() -> ExitCode {
                     }
                     RuntimeProbeError::Io(_) => {
                         "runtime probe I/O failed; inspect the private runtime installation and retry."
+                    }
+                },
+                CommandError::ModelProbe(error) => match error {
+                    ModelProbeError::ConsentRequired => {
+                        "model execution requires explicit --confirm consent."
+                    }
+                    ModelProbeError::Cancelled => "model probe was cancelled and stopped.",
+                    ModelProbeError::ModelMissing => {
+                        "the pinned GGUF is missing; download the selected profile first."
+                    }
+                    ModelProbeError::ModelInvalid => {
+                        "the pinned GGUF failed full size/SHA-256 verification; nothing was executed."
+                    }
+                    ModelProbeError::RuntimeMissing => {
+                        "the pinned runtime is not installed; run 'dociler model runtime-install --confirm' first."
+                    }
+                    ModelProbeError::RuntimeInvalid => {
+                        "the installed runtime failed full inventory verification; nothing was executed."
+                    }
+                    ModelProbeError::HardwareNotReady(_) => {
+                        "live hardware preflight did not admit this model; run 'dociler model status' and consider Remote mode. Experimental Lite is not enabled by this diagnostic."
+                    }
+                    ModelProbeError::Runtime(_) => {
+                        "the pinned runtime failed the model probe; check platform compatibility and local processes before retrying."
+                    }
+                    ModelProbeError::ModelIdentity => {
+                        "the runtime did not report the selected model alias/path/build; its child was stopped."
+                    }
+                    ModelProbeError::Generation => {
+                        "the bounded local generation check failed; its child was stopped."
+                    }
+                    ModelProbeError::TimedOut => {
+                        "model load or generation timed out; its child was stopped."
                     }
                 },
                 CommandError::Remote(error) => match error {

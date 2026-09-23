@@ -34,9 +34,9 @@ The confirmed, short-lived diagnostic probe below is not release-enabled local
 inference; the compiled inventory and CPU-instruction release gate remains open.
 
 Archive metadata, read-only cache verification, bounded extraction, installed
-file inventory, and a model-free runtime lifecycle probe are implemented. Model
-loading/generation, accelerator qualification, and GPU packages beyond macOS
-Metal remain pending.
+file inventory, a model-free runtime lifecycle probe, and a diagnostic-only
+model-load/tiny-generation probe are implemented. Persistent local inference,
+accelerator qualification, and GPU packages beyond macOS Metal remain pending.
 
 ## Primary model profiles
 
@@ -208,7 +208,7 @@ The initial extraction verification did not execute it. A later isolated
 Linux x86-64 smoke test ran the same pinned executable without a model and
 stopped it after its health/auth/version checks passed.
 
-`dociler model runtime-probe --confirm` is the only current runtime execution
+`dociler model runtime-probe --confirm` is the model-free runtime execution
 path. It rehashes every installed file immediately before launch, creates a
 private ephemeral API-key file and empty model/cache directories, runs the
 inventoried `llama-server` first with `--version`, rehashes again, then runs it
@@ -226,6 +226,24 @@ validation failure kills and reaps the child; success does the same. The port
 reservation-to-child-bind interval remains a local TOCTOU boundary, mitigated
 by the private key challenge and strict loopback response checks. This probe
 does not prove model fit, generation quality, GPU acceleration, or API safety.
+
+`dociler model load-probe PROFILE --confirm` is a separate explicit diagnostic
+for an already cached pinned GGUF and installed runtime. It fully rehashes both,
+runs a fresh hardware preflight, rejects experimental/incomplete/blocked states,
+checks the pinned server version, then repeats verification and preflight before
+spawning the single-model process. The current conservative settings are CPU
+only (`--n-gpu-layers 0`), 1,024 context tokens, one slot, up to four worker
+threads, 128/64 logical/physical batch sizes, no projector, no Web UI, and a
+private authenticated random loopback port. It requires health, unauthenticated
+rejection, exactly the selected alias, the selected model path, and pinned
+build metadata, then sends one fixed non-thinking request capped at 16 output
+tokens. Generation response bytes are bounded in memory and never displayed.
+The process is killed and reaped on the normal and error paths, or shutdown
+failure is reported; no backend preference is persisted. Mock tests use a tiny
+synthetic protocol fixture, not real model weights. A real Lite/Pro load has
+**not** yet been run or measured. Success would prove only a small diagnostic
+load/generation, not the 8K/16K context, RSS, quality,
+acceleration, or document gates required for local chat/release.
 
 Display download source and license before consent. Support list, verify, remove,
 repair, and update operations without deleting unrelated cached assets. Removal

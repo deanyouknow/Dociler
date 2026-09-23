@@ -15,8 +15,9 @@ M4 includes read-only RAM/CPU/disk inventory, conservative Lite/Pro preflight
 reporting, and a built-in pinned manifest with cache presence and SHA-256
 verification, plus a consent-gated resumable asset downloader with no-clobber
 publication, bounded runtime archive extraction with per-file inventory, and
-an explicit no-model runtime health/auth/version lifecycle probe. Local
-onboarding, model loading/inference, document processing, and serving remain
+an explicit no-model runtime health/auth/version lifecycle probe and a
+consent-gated, diagnostic-only model load/tiny generation probe. Local
+onboarding, persistent inference/chat, document processing, and serving remain
 future work. See
 [Configuration](configuration.md) and
 [Remote providers](remote-providers.md) for commands and boundaries.
@@ -65,6 +66,7 @@ cargo run --locked -- model verify dociler-lite
 cargo run --locked -- model download dociler-lite --confirm
 cargo run --locked -- model runtime-install --confirm
 cargo run --locked -- model runtime-probe --confirm
+cargo run --locked -- model load-probe dociler-lite --confirm
 cargo run --locked -- connect list
 cargo run --locked -- connect check PROFILE
 cargo run --locked -- connect edit PROFILE URL MODEL
@@ -129,6 +131,19 @@ model list, and router state, then kills and reaps it. This is a short diagnosti
 only. It does not persist a preferred backend, enable local chat, or expose the
 internal port/key. The command does not yet wire keyboard/signal cancellation;
 the shared service accepts a cancellation token for future TUI integration.
+
+`model load-probe PROFILE --confirm` first rehashes the exact pinned GGUF and
+installed runtime, repeats a live RAM/CPU/disk preflight, and refuses even the
+experimental 6–8 GB Lite state. It checks the pinned server version, rehashes
+both inputs and repeats preflight again, then briefly runs one CPU-only model
+with a 1,024-token context, one slot, capped threads/batches, a private key,
+and an OS-selected loopback port. It verifies health, key enforcement, alias,
+model path, and build, makes one fixed non-thinking 16-token-max generation,
+then kills/reaps the child. No response content or raw diagnostics are printed
+or saved. A successful diagnostic does not qualify the 8K/16K target contexts,
+RSS limits, GPU acceleration, model accuracy, or local chat. The scriptable
+command still lacks signal cancellation; the core service supports cooperative
+cancellation, including while generation is stalled.
 
 ## Workspace boundaries
 

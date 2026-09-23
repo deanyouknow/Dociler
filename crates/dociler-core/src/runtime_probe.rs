@@ -26,12 +26,12 @@ use crate::cancellation::CancellationToken;
 use crate::paths::AppPaths;
 use crate::runtime_install::{RuntimeInstallState, inspect_installed_runtime};
 
-const DIAGNOSTIC_LIMIT: usize = 8 * 1024;
-const RESPONSE_LIMIT: u64 = 8 * 1024;
+pub(crate) const DIAGNOSTIC_LIMIT: usize = 8 * 1024;
+pub(crate) const RESPONSE_LIMIT: u64 = 8 * 1024;
 const VERSION_TIMEOUT: Duration = Duration::from_secs(30);
 const SERVER_TIMEOUT: Duration = Duration::from_secs(20);
-const HTTP_TIMEOUT: Duration = Duration::from_millis(400);
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
+pub(crate) const HTTP_TIMEOUT: Duration = Duration::from_millis(400);
+pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeProbeOptions {
@@ -209,8 +209,8 @@ fn probe_server_with_timeout(
     let result = check_server(port, &key, &mut child, cancellation, start, server_timeout);
     let stopped = child.stop();
     let diagnostics = capture.finish();
-    result?;
     stopped?;
+    result?;
     Ok(RuntimeProbeReport {
         build: LLAMA_CPP_BUILD,
         startup_ms: start.elapsed().as_millis(),
@@ -219,7 +219,11 @@ fn probe_server_with_timeout(
     })
 }
 
-fn isolated_command(executable: &Path, install_directory: &Path, probe_dir: &TempDir) -> Command {
+pub(crate) fn isolated_command(
+    executable: &Path,
+    install_directory: &Path,
+    probe_dir: &TempDir,
+) -> Command {
     let mut command = Command::new(executable);
     command
         .env_clear()
@@ -254,7 +258,7 @@ fn safe_threads() -> usize {
         .unwrap_or(1)
 }
 
-fn make_key() -> Result<Zeroizing<String>, RuntimeProbeError> {
+pub(crate) fn make_key() -> Result<Zeroizing<String>, RuntimeProbeError> {
     let mut bytes = Zeroizing::new([0_u8; 32]);
     getrandom::fill(&mut *bytes).map_err(|_| RuntimeProbeError::Randomness)?;
     let mut value = Zeroizing::new(String::with_capacity(64));
@@ -265,7 +269,7 @@ fn make_key() -> Result<Zeroizing<String>, RuntimeProbeError> {
     Ok(value)
 }
 
-fn write_private_key(path: &Path, key: &str) -> Result<(), RuntimeProbeError> {
+pub(crate) fn write_private_key(path: &Path, key: &str) -> Result<(), RuntimeProbeError> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -281,7 +285,7 @@ fn write_private_key(path: &Path, key: &str) -> Result<(), RuntimeProbeError> {
         .map_err(|error| RuntimeProbeError::Io(error.kind()))
 }
 
-fn check_version(
+pub(crate) fn check_version(
     executable: &Path,
     install_directory: &Path,
     probe_dir: &TempDir,
@@ -393,7 +397,7 @@ fn check_server(
     Ok(())
 }
 
-fn fetch_json(
+pub(crate) fn fetch_json(
     client: &Client,
     url: &str,
     key: Option<&str>,
@@ -420,12 +424,12 @@ fn fetch_json(
     Ok(Some((status, value)))
 }
 
-struct ManagedChild {
-    child: Child,
+pub(crate) struct ManagedChild {
+    pub(crate) child: Child,
 }
 
 impl ManagedChild {
-    fn spawn(command: &mut Command) -> Result<Self, RuntimeProbeError> {
+    pub(crate) fn spawn(command: &mut Command) -> Result<Self, RuntimeProbeError> {
         command
             .spawn()
             .map(|child| Self { child })
@@ -455,7 +459,7 @@ impl ManagedChild {
         }
     }
 
-    fn stop(&mut self) -> Result<(), RuntimeProbeError> {
+    pub(crate) fn stop(&mut self) -> Result<(), RuntimeProbeError> {
         match self.child.try_wait() {
             Ok(Some(_)) => return Err(RuntimeProbeError::ProcessExited),
             Ok(None) => {}
@@ -482,19 +486,19 @@ impl Drop for ManagedChild {
     }
 }
 
-struct DiagnosticCapture {
+pub(crate) struct DiagnosticCapture {
     data: Arc<Mutex<BoundedLog>>,
     readers: Vec<thread::JoinHandle<()>>,
 }
 
 #[derive(Default)]
-struct BoundedLog {
-    bytes: VecDeque<u8>,
-    total: u64,
+pub(crate) struct BoundedLog {
+    pub(crate) bytes: VecDeque<u8>,
+    pub(crate) total: u64,
 }
 
 impl DiagnosticCapture {
-    fn start(child: &mut Child) -> Self {
+    pub(crate) fn start(child: &mut Child) -> Self {
         let data = Arc::new(Mutex::new(BoundedLog::default()));
         let mut readers = Vec::new();
         for stream in [
@@ -524,7 +528,7 @@ impl DiagnosticCapture {
         Self { data, readers }
     }
 
-    fn finish(self) -> BoundedLog {
+    pub(crate) fn finish(self) -> BoundedLog {
         let deadline = Instant::now() + Duration::from_secs(1);
         for reader in self.readers {
             while !reader.is_finished() && Instant::now() < deadline {

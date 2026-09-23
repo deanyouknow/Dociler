@@ -1,19 +1,20 @@
 # Project Checkpoint
 
-Last updated: 2026-09-23T01:07:27Z
+Last updated: 2026-09-23T01:50:41Z
 
 ## Current status
 
 **Status:** M3 remote text flow plus M4 hardware/preflight, pinned asset/cache
 verification, consent-gated downloads, safe inventoried runtime extraction,
-and an explicit model-free runtime probe are locally implemented and verified.
-Native cross-platform validation, model loading, and local inference remain
-pending.
+model-free runtime probing, and a diagnostic-only model-load/tiny-generation
+probe are locally implemented. The new load probe is verified with synthetic
+protocol fixtures only. Real-GGUF validation, native cross-platform checks,
+full-context/memory/quality qualification, and local chat remain pending.
 
 **Active milestone:** M4 — Hardware admission, verified local asset management,
 and runtime integration (inventory/preflight, manifest/cache verification,
-download/publication, safe extraction, and model-free probe complete locally;
-model-load/generation admission and inference pending).
+download/publication, safe extraction, model-free probe, and a diagnostic
+model-load controller complete locally; real-model and release admission pending).
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
 `dociler` executable with help, version, workspace/platform diagnostics, config
@@ -38,8 +39,11 @@ plus Lite/Pro model with resumable staging and verified no-clobber publication.
 It can reverify, safely extract, inventory, and inspect the pinned runtime. An
 explicit probe now rehashes the install, briefly starts its model-free router
 on authenticated loopback, checks health/build/authentication, and stops it.
-It has no local model loading, local-backend onboarding, document parsing,
-settings/grant update UI, or Dociler API yet. The
+An explicitly confirmed load probe can verify a cached pinned GGUF, repeat live
+hardware preflight, briefly load it at 1,024 tokens on CPU, make one bounded
+generation request, and stop. That path has only synthetic mock validation so
+far. It has no persistent local inference/chat, local-backend onboarding,
+document parsing, settings/grant update UI, or Dociler API yet. The
 five-platform CI workflow is defined; its hosted result
 could not be retrieved from this environment.
 
@@ -176,23 +180,32 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
   suite to 98. The exact pinned Linux x86-64 archive passed a real isolated
   model-free probe. Added ADR-021 and updated user/developer/runtime/privacy
   documentation.
+- Added consent-gated `model load-probe PROFILE --confirm` and a core controller
+  that rehashes the pinned GGUF/runtime, repeats live supported-tier preflight
+  before/after version validation, starts a CPU-only single-model process on
+  private authenticated loopback, verifies alias/path/build, performs a bounded
+  fixed non-thinking generation, and stops/reaps the child. It does not enable
+  chat or persist a backend choice.
+- Added six Linux core synthetic protocol/admission tests and one CLI consent/
+  missing-asset test, bringing the local suite to 105. Updated docs and ADR-022.
+  No real model weights were downloaded, loaded, or qualified in this unit.
 
 ## Work in progress
 
-No implementation unit is currently in progress. This probe unit started from
-a clean tree with no overlapping user changes. M1–M4 hosted/native execution
-remains unverified outside this Linux x86-64 environment.
+No implementation unit is currently in progress. This unit started from a clean
+tree with no overlapping user changes. M1–M4 hosted/native execution remains
+unverified outside this Linux x86-64 environment.
 
 ## Next recommended task
 
-Continue M4 with a bounded model-load/generation admission controller. Rehash
-the selected GGUF and runtime inventory, repeat live hardware preflight, launch
-only the pinned runtime with a private key and conservative Lite settings, and
-verify bounded generation/cancellation with a small permitted test fixture
-before admitting real Lite/Pro weights. Keep local chat disabled until these
-checks and memory-quality gates pass. The compiled per-file/CPU-instruction
-release manifest, CLI signal wiring, TUI local selection, removal/repair UI,
-and hosted native platform validation remain separate required units.
+Continue M4 by selecting a small, redistributable real GGUF fixture and running
+the pinned Linux x86-64 `llama-server` through the diagnostic load/generation
+path to confirm its exact flags and response contract. Then add measured
+process-group peak memory/limits and CLI signal cancellation before attempting
+real multi-gigabyte Lite/Pro diagnostics. Keep local chat disabled until
+full-context memory and model-quality gates pass. The compiled per-file/
+CPU-instruction release manifest, TUI local selection, removal/repair UI, and
+hosted native platform validation remain separate required units.
 Implementation remains authorized.
 
 ## Blockers
@@ -275,8 +288,39 @@ repository or shell startup files. Use the normal rustup setup described in
   and again before listening spawn, a private random key, loopback-only
   model-free router, exact health/auth/build/state checks, bounded diagnostics,
   and kill/reap on every result. This is not model or inference admission.
+- ADR-022: a separate consent-gated, CPU-only 1,024-token diagnostic may load
+  a pinned GGUF after repeated hash/hardware checks, confirm alias/path/build,
+  and make one bounded fixed generation; synthetic success does not admit local
+  chat, experimental Lite, or any 8K/16K memory/quality claim.
 
 ## Verification
+
+### M4 diagnostic model-load/tiny-generation controller — 2026-09-23
+
+All new model tests used a tiny synthetic mock protocol fixture and temporary
+loopback ports. No real GGUF was downloaded, loaded, or run. A successful
+`model load-probe` with real Lite/Pro assets has not been observed here.
+
+- **passed:** `cargo test --workspace --locked --offline` and optimized
+  `cargo test --workspace --release --locked --offline`: 105 tests (13 terminal,
+  17 CLI, 59 core unit, 11 foundation, 5 remote integration), plus empty
+  doctest suite.
+- **passed:** `cargo fmt --all -- --check`, strict `cargo clippy --workspace
+  --all-targets --locked --offline -- -D warnings`, Rust documentation with
+  warnings denied, release build, release PTY onboarding/chat/cancellation/
+  resize, `python3 scripts/check_docs.py` (16 Markdown files, 27 relative
+  links), and `git diff --check`.
+- **passed:** consent/missing/tampered model refusal, experimental/incomplete/
+  blocked hardware refusal, post-version revalidation barrier, exact model
+  alias/path/build and key checks, bounded generation output, load timeout,
+  stalled-generation cancellation, and child reaping with a synthetic server.
+- **failed then resolved:** sandboxed localhost binding initially prevented the
+  targeted mock test run; the authorized loopback run and full suites passed.
+  First strict Clippy run found two style violations, both corrected before the
+  clean rerun.
+- **not run:** real-GGUF generation, 8K/16K context, peak RSS on 8/16 GB
+  hosts, CLI signal cancellation, native macOS/Windows/Linux ARM64 model probes,
+  hosted CI, model-quality corpus, document analysis, or Dociler API.
 
 ### M4 authenticated model-free runtime probe — 2026-09-23
 
@@ -716,3 +760,5 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-21T00:59:59Z | Codex `/root` | Complete M4 safe runtime extraction | Added reverified bounded tar.gz/ZIP extraction, private staging, portable hostile-entry rejection, safe library-link materialization, per-file inventory/full inspection, required server validation, no-overwrite publication, CLI install/status, tests, docs, and ADR-020; resolves 00:42 entry | Cargo manifests/lock, core asset/runtime-install services, CLI/tests, README, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: five official checksums/layouts, real Linux archive install/verify without execution, fmt, strict Clippy, 92 debug/optimized tests, docs, release PTY, Markdown/diff; failed then resolved: sandbox DNS and stale smoke binary; not run: server execution/model loading/native non-Linux/stress/hosted gates | COMPLETE; M4 VERIFIED RUNTIME INSTALL ACTIVE | Add an inventory-revalidating, loopback-only, bounded runtime spawn/health/termination probe without loading a model |
 | 2026-09-23T00:39:58Z | Codex `/root` | Continue M4 bounded local runtime probe | Starting clean tree; implement reverified loopback-only no-model child launch, private key, bounded diagnostics, health/version validation, cancellation, cleanup, CLI surface, tests and handoff | Core runtime controller, CLI/tests, README/docs, CHECKPOINT.md | not run: probe implementation checks pending | IN PROGRESS | Complete lifecycle/cancellation tests without model loading or local chat |
 | 2026-09-23T01:07:27Z | Codex `/root` | Complete M4 model-free runtime probe | Added consent-gated inventory-rehashing pinned-runtime probe, private authenticated loopback router, bounded diagnostics, lifecycle/cancellation cleanup, CLI command, Linux mock tests, docs and ADR-021; resolves 00:39 entry | Cargo manifests/lock, core runtime probe/module, CLI/tests, README, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: 98 debug and optimized tests, fmt/strict Clippy before restart, release build, real isolated pinned Linux probe, release PTY, Markdown/diff; failed then resolved: lost temporary Cargo cache and sandboxed loopback PTY; not run: GGUF load/generation, non-Linux native/hosted, signal, quality gates | COMPLETE; M4 INFERENCE INTEGRATION PENDING | Implement bounded model-load/generation admission with rehash, live preflight, private key, cancellation, and a small permitted fixture before local chat |
+| 2026-09-23T01:31:44Z | Codex `/root` | Continue M4 bounded model-load admission | Starting clean tree; add rehashed model/runtime admission, live preflight, private loopback load and bounded generation checks with deterministic fixture tests; keep local chat disabled | Core runtime/model admission, CLI/tests if safe, README/docs, CHECKPOINT.md | not run: admission implementation checks pending | IN PROGRESS | Verify lifecycle, failure, memory, and cancellation before any user-facing local chat |
+| 2026-09-23T01:50:41Z | Codex `/root` | Complete diagnostic M4 model-load controller unit | Added consent-gated pinned-GGUF/runtime rehash and live preflight, CPU-only private loopback load, alias/path/build/auth validation, bounded fixed generation, shutdown/cancellation, CLI command, synthetic tests, docs and ADR-022; resolves 01:31 entry without claiming real-model admission | Core model/runtime-probe modules, CLI/tests, README, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: 105 debug/release tests, strict Clippy, fmt, Rust docs, release build/PTY, Markdown/diff; failed then resolved: sandbox loopback denial and initial Clippy findings; not run: real GGUF, memory/quality/platform/signal gates | DIAGNOSTIC CONTROLLER COMPLETE; M4 REAL-MODEL QUALIFICATION PENDING | Select a licensed tiny real GGUF fixture, validate exact pinned runtime load/generation, then add peak-memory and signal-cancel gates before multi-GB profiles |
