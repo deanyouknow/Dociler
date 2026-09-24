@@ -28,7 +28,7 @@ serde_json = "=1.0.140"
 sha2 = "=0.10.9"
 sysinfo = { version = "=0.33.1", default-features = false, features = ["disk", "system"] }
 tar = "=0.4.44"
-tempfile = "=3.19.1"
+tempfile = "=3.27.0"
 tokio = { version = "=1.53.1", features = ["rt", "time", "signal"] }
 url = "=2.5.4"
 unicode-width = "=0.2.0"
