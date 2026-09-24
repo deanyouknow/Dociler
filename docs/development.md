@@ -27,7 +27,8 @@ Direct dependencies are pinned: directories 6.0.0, Serde 1.0.219, serde_json
 keyring 3.6.3, Ratatui 0.29.0, Crossterm 0.28.1, Unicode Width 0.2.0,
 SHA-2 0.10.9, and sysinfo 0.33.1 with only system/disk features.
 Futures Util 0.3.34 and Tokio 1.53.1 support cancellable remote I/O without a
-process-global runtime. fs2 0.4.3 provides cross-platform advisory asset locks;
+process-global runtime. Tokio's signal feature also backs a short-lived CLI
+probe cancellation listener. fs2 0.4.3 provides cross-platform advisory asset locks;
 libc 0.2.189 is used only for Unix no-follow file opens. flate2 1.1.2 (Rust
 backend), tar 0.4.44, and ZIP 2.4.2 (Deflate only) provide in-process bounded
 runtime archive parsing. getrandom 0.3.4 supplies the ephemeral internal probe
@@ -129,8 +130,9 @@ executes only the pinned server, without a GGUF, in a private model-free
 loopback router. It verifies the server build, health, authentication, empty
 model list, and router state, then kills and reaps it. This is a short diagnostic
 only. It does not persist a preferred backend, enable local chat, or expose the
-internal port/key. The command does not yet wire keyboard/signal cancellation;
-the shared service accepts a cancellation token for future TUI integration.
+internal port/key. SIGINT/SIGTERM on Unix and Ctrl+C/Ctrl+Break on Windows
+request cooperative cancellation; the probe stops and reaps its child before
+the CLI exits nonzero. Forced termination cannot guarantee cleanup.
 
 `model load-probe PROFILE --confirm` first rehashes the exact pinned GGUF and
 installed runtime, repeats a live RAM/CPU/disk preflight, and refuses even the
@@ -141,9 +143,13 @@ and an OS-selected loopback port. It verifies health, key enforcement, alias,
 model path, and build, makes one fixed non-thinking 16-token-max generation,
 then kills/reaps the child. No response content or raw diagnostics are printed
 or saved. A successful diagnostic does not qualify the 8K/16K target contexts,
-RSS limits, GPU acceleration, model accuracy, or local chat. The scriptable
-command still lacks signal cancellation; the core service supports cooperative
-cancellation, including while generation is stalled.
+RSS limits, GPU acceleration, model accuracy, or local chat. The same CLI
+signal handling requests cooperative cancellation, including while generation
+is stalled. On Linux, the command reports the child `llama-server` process's
+`VmHWM` high-water RSS if `/proc` is available; other platforms report it as
+unavailable. This excludes the Dociler parent, descendants, parser/index work,
+and GPU memory, so it is not the process-group release memory gate and enforces
+no hard memory limit.
 
 ## Workspace boundaries
 

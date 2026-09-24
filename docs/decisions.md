@@ -362,10 +362,31 @@ from this diagnostic.
 or whether the pinned server can generate with them. A small diagnostic
 separates that protocol/lifecycle step from expensive full-context memory and
 quality qualification. Experimental 6–8 GB Lite is refused until it has a
-measured admission policy. The current fixture is a synthetic mock and does
-not claim real-GGUF validation.
+measured admission policy. Regular tests use a synthetic mock; a separate
+opt-in tiny real-GGUF test verifies only the basic pinned server contract.
 
 **Rejected:** Implicit model load during `doctor`/`model status`, trusting a
 prior cache hash or hardware snapshot, automatic GPU offload, exposing the raw
 server, persisting the probe process, printing test output, or treating a tiny
 generation as proof that 8K/16K contexts and RSS/quality gates pass.
+
+## ADR-023: Scoped probe signals and honest child-only memory telemetry
+
+**Decision:** For explicitly confirmed scriptable runtime/model probes, register
+a short-lived signal listener before presenting the probe-start message. Map
+Unix SIGINT/SIGTERM and Windows Ctrl+C/Ctrl+Break to the existing cooperative
+cancellation token, and let the core controller stop/reap the sidecar. On Unix,
+place the sidecar in its own process group so terminal Ctrl+C reaches Dociler
+without racing a direct sidecar signal exit. On Linux, observe the live server's
+kernel `VmHWM` high-water RSS and report it as a server-only diagnostic or
+“unavailable”; do not use it as a release admission result or memory cap.
+
+**Why:** A signal must not bypass cleanup or turn into a successful probe.
+Partial RSS from one short-lived process is useful for validating the observer
+but excludes Dociler, descendants, document work, GPU memory, full context, and
+sustained generation. Labeling it as process-group peak would overstate the
+evidence for the 8/16 GB product targets.
+
+**Rejected:** Exiting directly from a signal callback, interpreting missing
+`/proc` metrics as zero, imposing an unqualified virtual-memory limit on a
+memory-mapped GGUF, or declaring Lite/Pro qualified from a tiny-model RSS.

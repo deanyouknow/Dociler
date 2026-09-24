@@ -207,8 +207,9 @@ ring. The process is terminated and reaped on success, cancellation, timeout,
 or validation failure. The current command is not a model-load or network
 sandbox: a compromised verified binary, same-user filesystem race, or local
 process able to read same-user private files remains outside its guarantees.
-CLI signal cancellation and native non-Linux process behavior still need
-validation.
+The scriptable probe now handles SIGINT/SIGTERM on Unix and Ctrl+C/Ctrl+Break
+on Windows by requesting cancellation and waiting for normal child cleanup.
+Forced termination and native non-Linux process behavior still need validation.
 
 The model-load diagnostic adds explicit consent and repeats full pinned GGUF
 hashing, runtime inventory validation, and live hardware preflight before and
@@ -219,7 +220,9 @@ bounded in-memory response and does not print or save it. Cancellation and
 timeouts stop/reap the child. This is not a hardened process sandbox, a
 same-user filesystem-race solution, or permission to route user documents or
 chat through the local backend. CLI signal wiring and real-model memory
-measurement remain open.
+qualification remain open. Linux now reports a child-only `VmHWM` high-water
+RSS for the short diagnostic, without retaining it; this is not an enforced
+process-group memory limit or full-session measurement.
 
 ## Threat boundary
 

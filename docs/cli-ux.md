@@ -100,7 +100,10 @@ fully cached, checksum-verified GGUF and installed runtime. It repeats live
 hardware preflight, refuses the experimental Lite state, briefly loads the
 model on CPU at a 1,024-token context, performs a fixed tiny generation, and
 stops. It does not select the backend, show the generated text, or enable chat.
-The 8K/16K memory and quality gates still have to pass.
+On Linux it prints a child-only peak RSS measurement, explicitly not the full
+process-group release gate. Ctrl+C/SIGTERM on Unix or Ctrl+C/Ctrl+Break on
+Windows requests cancellation and child cleanup for either probe. The 8K/16K
+memory and quality gates still have to pass.
 
 ### Backend choice
 

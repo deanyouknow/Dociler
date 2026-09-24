@@ -251,6 +251,14 @@ cancellation, or failure and reports failed shutdown. Neither its port nor
 generated content is returned to callers. This is not an admitted chat backend
 or an 8K/16K qualification.
 
+The scriptable CLI now owns a scoped signal listener for each explicit probe.
+It translates Unix SIGINT/SIGTERM or Windows Ctrl+C/Ctrl+Break into the shared
+token, leaving process termination/reaping to the core controller. A Linux-only
+observer samples the server process's kernel high-water RSS during the load
+probe. This deliberately excludes the parent, descendants, document pipeline,
+and GPU allocations; full process-group memory accounting and enforcement
+remain separate release work.
+
 ## Failure containment
 
 - Parser crash/timeout affects only the worker and produces a per-file error.

@@ -114,6 +114,9 @@ pub fn probe_installed_runtime(
             return Err(RuntimeProbeError::InstallInvalid);
         }
     }
+    if cancellation.is_cancelled() {
+        return Err(RuntimeProbeError::Cancelled);
+    }
     probe_server(
         installed.server_path(),
         installed.path(),
@@ -167,6 +170,9 @@ fn probe_server_with_timeout(
             != RuntimeInstallState::Verified
         {
             return Err(RuntimeProbeError::InstallInvalid);
+        }
+        if cancellation.is_cancelled() {
+            return Err(RuntimeProbeError::Cancelled);
         }
     }
 
@@ -239,7 +245,14 @@ pub(crate) fn isolated_command(
     #[cfg(target_os = "macos")]
     command.env("DYLD_LIBRARY_PATH", install_directory);
     #[cfg(unix)]
-    command.env("PATH", "/usr/bin:/bin");
+    {
+        use std::os::unix::process::CommandExt;
+        command.env("PATH", "/usr/bin:/bin");
+        // A terminal Ctrl+C targets its foreground process group. Keep the
+        // sidecar outside Dociler's group so the CLI can request cancellation
+        // and confirm child cleanup instead of racing its signal exit.
+        command.process_group(0);
+    }
     #[cfg(windows)]
     {
         // Windows needs SystemRoot to locate system DLLs even with a cleared
@@ -581,6 +594,7 @@ import time
 MODE = "__MODE__"
 EXECUTED = __EXECUTED__
 PID_PATH = __PID_PATH__
+PGID_PATH = __PGID_PATH__
 open(EXECUTED, "w", encoding="ascii").write("yes")
 if "--version" in sys.argv:
     if MODE == "tamper_after_version":
@@ -592,6 +606,7 @@ if "--version" in sys.argv:
     sys.exit(0)
 
 open(PID_PATH, "w", encoding="ascii").write(str(os.getpid()))
+open(PGID_PATH, "w", encoding="ascii").write(str(os.getpgrp()))
 if MODE == "exit":
     sys.exit(7)
 if MODE == "hang":
@@ -643,6 +658,7 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         server: std::path::PathBuf,
         executed: std::path::PathBuf,
         pid_path: std::path::PathBuf,
+        pgid_path: std::path::PathBuf,
     }
 
     impl Fixture {
@@ -675,6 +691,7 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             let server = root.join("llama-server");
             let executed = temp.path().join("executed");
             let pid_path = temp.path().join("child.pid");
+            let pgid_path = temp.path().join("child.pgid");
             let script = MOCK_SERVER
                 .replace("__MODE__", mode)
                 .replace(
@@ -684,6 +701,10 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
                 .replace(
                     "__PID_PATH__",
                     &format!("{:?}", pid_path.display().to_string()),
+                )
+                .replace(
+                    "__PGID_PATH__",
+                    &format!("{:?}", pgid_path.display().to_string()),
                 );
             fs::write(&server, &script).unwrap();
             use std::os::unix::fs::PermissionsExt;
@@ -712,6 +733,7 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
                 server,
                 executed,
                 pid_path,
+                pgid_path,
             }
         }
 
@@ -761,6 +783,11 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         assert_eq!(report.build, LLAMA_CPP_BUILD);
         assert!(report.diagnostic_bytes_seen >= 100_000);
         assert!(report.diagnostic_bytes_retained <= DIAGNOSTIC_LIMIT);
+        assert_eq!(
+            fs::read_to_string(&fixture.pid_path).unwrap(),
+            fs::read_to_string(&fixture.pgid_path).unwrap(),
+            "the Unix sidecar should lead its own process group"
+        );
         fixture.assert_child_reaped();
     }
 

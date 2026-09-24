@@ -33,6 +33,7 @@ use dociler_core::runtime_probe::{
 use dociler_core::session::{Role, Session};
 use dociler_core::workspace::{Workspace, WritePolicy};
 
+mod cli_signals;
 mod tui;
 
 const HELP: &str = "Dociler — local-first document assistant (development build)
@@ -344,6 +345,7 @@ enum CommandError {
     RuntimeInstall(RuntimeInstallError),
     RuntimeProbe(RuntimeProbeError),
     ModelProbe(ModelProbeError),
+    Signal,
     Remote(RemoteError),
     Terminal,
 }
@@ -924,6 +926,9 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             let runtime = current_runtime_asset().ok_or(CommandError::Usage(
                 "no pinned llama.cpp runtime exists for this platform; use Remote mode",
             ))?;
+            let cancellation = CancellationToken::new();
+            let _signals = cli_signals::CliSignalGuard::install(cancellation.clone())
+                .map_err(|_| CommandError::Signal)?;
             writeln!(
                 output,
                 "Reverifying the pinned runtime before a model-free loopback probe. No GGUF will be loaded."
@@ -933,7 +938,7 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 &app_paths,
                 *runtime,
                 RuntimeProbeOptions::confirmed(),
-                &CancellationToken::new(),
+                &cancellation,
             )
             .map_err(CommandError::RuntimeProbe)?;
             writeln!(
@@ -961,6 +966,9 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             let runtime = current_runtime_asset().ok_or(CommandError::Usage(
                 "no pinned llama.cpp runtime exists for this platform; use Remote mode",
             ))?;
+            let cancellation = CancellationToken::new();
+            let _signals = cli_signals::CliSignalGuard::install(cancellation.clone())
+                .map_err(|_| CommandError::Signal)?;
             writeln!(
                 output,
                 "Reverifying {} and the pinned runtime; a diagnostic 1024-token-context CPU process will briefly run.",
@@ -971,14 +979,8 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 "This does not qualify the full context, memory target, model quality, or local chat."
             )?;
             output.flush()?;
-            let report = probe_cached_model(
-                &app_paths,
-                *runtime,
-                profile,
-                true,
-                &CancellationToken::new(),
-            )
-            .map_err(CommandError::ModelProbe)?;
+            let report = probe_cached_model(&app_paths, *runtime, profile, true, &cancellation)
+                .map_err(CommandError::ModelProbe)?;
             writeln!(
                 output,
                 "Model load probe passed for {} at {} tokens; health was ready in {} ms and generation took {} ms.",
@@ -992,6 +994,16 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 "Captured {} diagnostic bytes in memory; the process stopped. Local chat remains disabled.",
                 report.diagnostic_bytes_seen
             )?;
+            match report.server_peak_rss_bytes {
+                Some(bytes) => writeln!(
+                    output,
+                    "Diagnostic server-only peak RSS: {bytes} bytes (Linux VmHWM; not the full Dociler process-group or release memory gate)."
+                )?,
+                None => writeln!(
+                    output,
+                    "Diagnostic server-only peak RSS: unavailable on this platform; no memory qualification was performed."
+                )?,
+            }
         }
         Command::ConnectList => {
             let loaded = settings()?;
@@ -1408,6 +1420,9 @@ fn main() -> ExitCode {
                         "model load or generation timed out; its child was stopped."
                     }
                 },
+                CommandError::Signal => {
+                    "could not install terminal cancellation handlers; no probe was started."
+                }
                 CommandError::Remote(error) => match error {
                     RemoteError::InvalidProfile => "invalid remote profile name, URL, or model.",
                     RemoteError::UnsafeEndpoint => {

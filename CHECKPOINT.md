@@ -1,6 +1,6 @@
 # Project Checkpoint
 
-Last updated: 2026-09-23T02:08:25Z
+Last updated: 2026-09-24T18:43:16Z
 
 ## Current status
 
@@ -8,9 +8,11 @@ Last updated: 2026-09-23T02:08:25Z
 verification, consent-gated downloads, safe inventoried runtime extraction,
 model-free runtime probing, and a diagnostic-only model-load/tiny-generation
 probe are locally implemented. The load probe passed synthetic fixtures and
-an opt-in 105 MB real-GGUF test with the pinned Linux x86-64 runtime. Pinned
-Lite/Pro validation, native cross-platform checks,
-full-context/memory/quality qualification, and local chat remain pending.
+an opt-in 105 MB real-GGUF test with the pinned Linux x86-64 runtime. Scoped
+CLI signal cancellation and Linux server-only peak-RSS diagnostics now exist;
+they do not enforce or prove the full process-group memory gate. Pinned
+Lite/Pro validation, native cross-platform checks, full-context/memory/quality
+qualification, and local chat remain pending.
 
 **Active milestone:** M4 — Hardware admission, verified local asset management,
 and runtime integration (inventory/preflight, manifest/cache verification,
@@ -44,7 +46,10 @@ An explicitly confirmed load probe can verify a cached pinned GGUF, repeat live
 hardware preflight, briefly load it at 1,024 tokens on CPU, make one bounded
 generation request, and stop. The exact server path has also passed a tiny
 real-model protocol check; this does not qualify either supported profile. It
-has no persistent local inference/chat, local-backend onboarding,
+now translates scriptable probe signals into cooperative cancellation, isolates
+the Unix sidecar process group, and reports Linux `llama-server` high-water RSS
+as a child-only diagnostic. It has no persistent local inference/chat,
+local-backend onboarding,
 document parsing, settings/grant update UI, or Dociler API yet. The
 five-platform CI workflow is defined; its hosted result
 could not be retrieved from this environment.
@@ -197,20 +202,33 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
   in isolated `/tmp` state. Its actual load, authenticated alias/path/build
   contract, fixed generation, and child shutdown passed. The fixture is not a
   Dociler model profile, and neither Lite nor Pro was downloaded or qualified.
+- Added scoped SIGINT/SIGTERM (Unix) and Ctrl+C/Ctrl+Break (Windows) listeners
+  for scriptable runtime/model probes. Unix sidecars now start in their own
+  process group so ordinary terminal interrupts reach Dociler for cooperative
+  cancellation and confirmed child reaping. Cancellation checks follow asset
+  rehash phases; full multi-GB hashing itself is not yet interruptible.
+- Added Linux server-process `VmHWM` high-water RSS observation to the model
+  load diagnostic, with an explicit unavailable state elsewhere. The opt-in
+  pinned tiny GGUF test recorded 177,229,824 bytes on one Linux x86-64 host;
+  this excludes Dociler and document work and is not release qualification.
+  Added signal/process-group/memory tests and ADR-023.
 
 ## Work in progress
 
 No implementation unit is currently in progress. This unit started from a clean
 tree after the previous unit was committed and pushed, with no overlapping user
 changes. M1–M4 hosted/native execution remains unverified outside this Linux
-x86-64 environment.
+x86-64 environment. The new safety unit is locally verified but does not
+complete M4 profile admission.
 
 ## Next recommended task
 
-Continue M4 by adding measured process-group peak memory/limits and CLI signal
-cancellation to the diagnostic path before attempting real multi-gigabyte
-Lite/Pro diagnostics. Repeat the opt-in protocol test on other native platforms
-with appropriately pinned runtimes/fixtures. Keep local chat disabled until
+Continue M4 by designing and testing full process-group peak memory accounting
+and an enforceable admission/abort policy that includes Dociler, the runtime,
+and document work on constrained hosts. Verify signal cancellation during an
+actual long-running pinned Lite/Pro load; make multi-GB rehash cancellable.
+Then attempt real Lite/Pro diagnostics, and repeat native signal/model checks
+on macOS/Windows/Linux ARM64 with pinned runtimes. Keep local chat disabled until
 full-context memory and model-quality gates pass. The compiled per-file/
 CPU-instruction release manifest, TUI local selection, removal/repair UI, and
 hosted native platform validation remain separate required units.
@@ -303,8 +321,35 @@ repository or shell startup files. Use the normal rustup setup described in
 - A real 135M GGUF is an opt-in test fixture only, kept outside Git and the
   public asset manifest. Passing this small protocol check does not imply
   Qwen3.5 Lite/Pro memory, context, quality, or release admission.
+- ADR-023: confirmed CLI probes own scoped signal listeners; Unix sidecars
+  enter a separate process group; Linux `VmHWM` is a child-only diagnostic and
+  never substitutes for enforced process-group/full-session memory admission.
 
 ## Verification
+
+### M4 probe signal and diagnostic memory safety — 2026-09-24
+
+- **passed:** `cargo test --workspace --all-targets --locked --offline` and
+  `cargo test --workspace --release --all-targets --locked --offline` on Linux:
+  108 regular tests, one ignored opt-in real-GGUF test, no failures. The new
+  tests cover separate-process SIGINT/SIGTERM cancellation, Unix child PGID,
+  Linux high-water parsing, and nonzero probe memory observation.
+- **passed:** strict all-target Clippy, fmt, `python3 scripts/check_docs.py`
+  (16 Markdown files, 28 relative links), `RUSTDOCFLAGS=-Dwarnings cargo doc
+  --workspace --no-deps --locked --offline`, and `git diff --check`.
+- **passed:** opt-in pinned Linux `b10809` plus immutable 105,454,432-byte
+  SmolLM2 Q4_K_M GGUF load/generation after exact SHA-256 checks; reported
+  177,229,824 bytes of **server-only** high-water RSS. A real `dociler model
+  runtime-probe --confirm` subprocess returned nonzero cancellation on SIGINT
+  during preflight, with no server retained.
+- **failed then resolved:** initial offline Cargo check lacked the ephemeral
+  dependency cache; an authorized registry fetch restored it. Initial fmt
+  mismatch was corrected. A load-probe SIGINT smoke attempt returned the
+  expected missing-pinned-model error before the signal arrived, so it does not
+  count as a successful load-cancellation test.
+- **not run:** full process-group peak RSS, hard memory enforcement, actual
+  Lite/Pro model load/signal cancellation, 8K/16K sustained sessions, native
+  non-Linux platforms, hosted CI, model-quality corpus, documents, or API.
 
 ### M4 opt-in real-GGUF protocol check — 2026-09-23
 
@@ -796,3 +841,5 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-23T01:50:41Z | Codex `/root` | Complete diagnostic M4 model-load controller unit | Added consent-gated pinned-GGUF/runtime rehash and live preflight, CPU-only private loopback load, alias/path/build/auth validation, bounded fixed generation, shutdown/cancellation, CLI command, synthetic tests, docs and ADR-022; resolves 01:31 entry without claiming real-model admission | Core model/runtime-probe modules, CLI/tests, README, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: 105 debug/release tests, strict Clippy, fmt, Rust docs, release build/PTY, Markdown/diff; failed then resolved: sandbox loopback denial and initial Clippy findings; not run: real GGUF, memory/quality/platform/signal gates | DIAGNOSTIC CONTROLLER COMPLETE; M4 REAL-MODEL QUALIFICATION PENDING | Select a licensed tiny real GGUF fixture, validate exact pinned runtime load/generation, then add peak-memory and signal-cancel gates before multi-GB profiles |
 | 2026-09-23T02:02:22Z | Codex `/root` | Continue M4 real-GGUF diagnostic validation after publishing prior unit | Commit `d083439` and push `main`; select a licensed small GGUF fixture, exercise the pinned Linux runtime through the existing diagnostic path, and document results without enabling local chat | Core model-probe tests if needed, runtime/testing docs, CHECKPOINT.md | not run: real-GGUF validation pending; passed: prior commit pushed to origin | IN PROGRESS | Pin fixture, test the real server contract, and preserve memory/signal/quality gates as pending unless separately verified |
 | 2026-09-23T02:08:25Z | Codex `/root` | Complete M4 real-GGUF diagnostic validation | Added opt-in hash-pinned SmolLM2 fixture test, ran real pinned Linux server from isolated verified install, recorded exact reproduction and release limits; resolves 02:02 entry | `crates/dociler-core/src/model_probe.rs`, `docs/testing-and-release.md`, `docs/models-and-runtime.md`, `CHECKPOINT.md` | passed: real fixture load/generation, 105 regular tests, strict Clippy, fmt, Markdown links, diff; failed then resolved: sandbox loopback denial and formatting; not run: release tests, Lite/Pro, memory/signal/platform/quality gates | COMPLETE; M4 PROFILE ADMISSION PENDING | Add process-group peak memory/limits and CLI signal cancellation, then test real Lite/Pro only after those gates |
+| 2026-09-24T18:22:46Z | Codex `/root` | Continue M4 diagnostic safety gates | Starting clean tree; add measurable child-process memory reporting and scriptable probe signal cancellation, with deterministic tests and documentation; leave local chat and Lite/Pro release admission disabled | Core probe lifecycle/model probe, CLI and integration tests, README/docs, CHECKPOINT.md | not run: new checks pending | IN PROGRESS | Verify cancellation, reaping, memory metric semantics, and platform fallbacks; commit and push after verification |
+| 2026-09-24T18:43:16Z | Codex `/root` | Complete M4 scoped probe-signal and child-RSS diagnostic unit | Added scoped Unix/Windows signal cancellation, Unix child process-group separation, rehash-phase cancellation checks, Linux `VmHWM` observer, CLI output, tests, ADR-023, and honest limits; resolves 18:22 entry | Cargo manifests/lock, core probe/memory modules, CLI signal/main modules, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: 108 debug and optimized regular tests, opt-in real GGUF with 177,229,824-byte child RSS, CLI SIGINT preflight smoke, strict Clippy, fmt, Rust docs, Markdown/diff; failed then resolved: absent temporary crate cache and first fmt check; not run: full process-group/hard limit, actual Lite/Pro cancellation, native non-Linux/hosted/quality gates | COMPLETE; M4 RELEASE ADMISSION PENDING | Implement full process-group peak memory accounting and enforceable constrained-host admission, then attempt pinned Lite/Pro full-context diagnostics |

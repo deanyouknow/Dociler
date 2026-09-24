@@ -249,6 +249,15 @@ Lite/Pro load has **not** yet been run or measured. Success would prove only a s
 load/generation, not the 8K/16K context, RSS, quality,
 acceleration, or document gates required for local chat/release.
 
+The scriptable probes now translate SIGINT/SIGTERM on Unix and Ctrl+C/Ctrl+Break
+on Windows into the same cooperative cancellation token used by their core
+services. On Linux, the load probe samples `llama-server`'s kernel `VmHWM`
+high-water RSS while the child is alive and reports it separately. A missing
+`/proc` value yields “unavailable,” never zero. This is **server-only**
+diagnostic telemetry, not the process-group peak that includes Dociler, parser,
+indexing, descendants, and sustained generation. It neither enforces a memory
+ceiling nor admits Lite/Pro for release.
+
 Display download source and license before consent. Support list, verify, remove,
 repair, and update operations without deleting unrelated cached assets. Removal
 and repair remain pending.

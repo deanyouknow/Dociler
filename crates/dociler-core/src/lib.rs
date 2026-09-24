@@ -13,6 +13,7 @@ pub mod downloads;
 pub mod hardware;
 pub mod model_probe;
 pub mod paths;
+mod probe_memory;
 pub mod profiles;
 pub mod remote;
 pub mod runtime_install;

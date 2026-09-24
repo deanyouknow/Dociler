@@ -23,6 +23,7 @@ use crate::cancellation::CancellationToken;
 use crate::config::LocalProfile;
 use crate::hardware::{HardwareInventory, ModelPreflight, PreflightStatus};
 use crate::paths::AppPaths;
+use crate::probe_memory::ChildMemorySampler;
 use crate::runtime_install::{RuntimeInstallState, inspect_installed_runtime};
 use crate::runtime_probe::{
     DiagnosticCapture, HTTP_TIMEOUT, ManagedChild, POLL_INTERVAL, RuntimeProbeError, check_version,
@@ -77,6 +78,8 @@ pub struct ModelProbeReport {
     pub startup_ms: u128,
     pub generation_ms: u128,
     pub diagnostic_bytes_seen: u64,
+    /// Linux child-process VmHWM only; not Dociler process-group peak RSS.
+    pub server_peak_rss_bytes: Option<u64>,
 }
 
 /// Rehash pinned inputs, repeat live hardware preflight, and briefly load and
@@ -96,6 +99,9 @@ pub fn probe_cached_model(
     }
     let model = model_asset(profile).artifact();
     verify_model(paths, model)?;
+    if cancellation.is_cancelled() {
+        return Err(ModelProbeError::Cancelled);
+    }
     let installed = inspect_installed_runtime(paths, runtime, VerificationLevel::Sha256);
     match installed.state() {
         RuntimeInstallState::Missing => return Err(ModelProbeError::RuntimeMissing),
@@ -104,15 +110,24 @@ pub fn probe_cached_model(
             return Err(ModelProbeError::RuntimeInvalid);
         }
     }
+    if cancellation.is_cancelled() {
+        return Err(ModelProbeError::Cancelled);
+    }
     let hardware = HardwareInventory::inspect(&paths.data_dir);
     admit_hardware(ModelPreflight::evaluate(profile, &hardware).status())?;
     let model_path = model.cache_path(paths);
     let revalidate = || {
         verify_model(paths, model)?;
+        if cancellation.is_cancelled() {
+            return Err(ModelProbeError::Cancelled);
+        }
         if inspect_installed_runtime(paths, runtime, VerificationLevel::Sha256).state()
             != RuntimeInstallState::Verified
         {
             return Err(ModelProbeError::RuntimeInvalid);
+        }
+        if cancellation.is_cancelled() {
+            return Err(ModelProbeError::Cancelled);
         }
         let hardware = HardwareInventory::inspect(&paths.data_dir);
         admit_hardware(ModelPreflight::evaluate(profile, &hardware).status())
@@ -220,6 +235,7 @@ where
 
     let start = Instant::now();
     let mut child = ManagedChild::spawn(&mut command).map_err(ModelProbeError::Runtime)?;
+    let memory = ChildMemorySampler::start(child.child.id());
     let capture = DiagnosticCapture::start(&mut child.child);
     let result = check_loaded_server(
         AuthenticatedEndpoint { port, key: &key },
@@ -230,6 +246,7 @@ where
         start,
         load_timeout,
     );
+    let server_peak_rss_bytes = memory.finish();
     let stopped = child.stop();
     let diagnostics = capture.finish();
     stopped.map_err(ModelProbeError::Runtime)?;
@@ -240,6 +257,7 @@ where
         startup_ms,
         generation_ms,
         diagnostic_bytes_seen: diagnostics.total,
+        server_peak_rss_bytes,
     })
 }
 
@@ -645,6 +663,7 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             .unwrap();
         assert_eq!(report.profile, LocalProfile::Lite);
         assert_eq!(report.context_tokens, DIAGNOSTIC_CONTEXT);
+        assert!(report.server_peak_rss_bytes.is_some_and(|bytes| bytes > 0));
         fixture.assert_reaped();
         let args: Vec<String> = serde_json::from_slice(&fs::read(&fixture.args).unwrap()).unwrap();
         assert!(
@@ -778,5 +797,10 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         assert_eq!(report.context_tokens, DIAGNOSTIC_CONTEXT);
         assert!(report.startup_ms < LOAD_TIMEOUT.as_millis());
         assert!(report.generation_ms < GENERATION_TIMEOUT.as_millis());
+        assert!(report.server_peak_rss_bytes.is_some_and(|bytes| bytes > 0));
+        eprintln!(
+            "diagnostic server-only peak RSS: {} bytes",
+            report.server_peak_rss_bytes.unwrap()
+        );
     }
 }

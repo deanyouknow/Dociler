@@ -237,3 +237,17 @@ The pinned Linux x86-64 runtime passed this opt-in test on 2026-09-23. Real
 pinned Lite/Pro loads, process-group peak RSS, 8K/16K contexts, CPU/GPU target
 matrix, signal cancellation, model quality, and local chat remain unverified
 release gates.
+
+The diagnostic safety unit adds a scoped CLI signal listener and Linux
+child-only high-water RSS reporting. Its automated Linux tests send SIGINT and
+SIGTERM to a separate process (never the test runner) and check token
+cancellation; memory parser/current-process tests reject malformed units and
+require a nonzero kernel reading. A pinned real 135M GGUF probe produced a
+177,229,824-byte server-only high-water RSS on one Linux x86-64 host; that
+figure is not a supported-tier budget. A scriptable model-free CLI probe
+also returned cancellation after SIGINT during preflight; no server was left
+running.
+These checks do not establish full process-
+group memory accounting, hard memory enforcement, signal cancellation of a
+multi-gigabyte model load, or native macOS/Windows signal behavior. Those remain
+explicit release gates.

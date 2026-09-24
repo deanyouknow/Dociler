@@ -12,6 +12,7 @@ publish.workspace = true
 crossterm.workspace = true
 dociler-core.workspace = true
 ratatui.workspace = true
+tokio.workspace = true
 unicode-width.workspace = true
 zeroize.workspace = true
 
