@@ -1,6 +1,6 @@
 # Project Checkpoint
 
-Last updated: 2026-09-24T18:43:16Z
+Last updated: 2026-09-26T19:01:56Z
 
 ## Current status
 
@@ -56,6 +56,10 @@ could not be retrieved from this environment.
 
 ## Completed
 
+- Exported the 2026-09-26 [agent handoff](HANDOFF.md): conversation context,
+  approved naming/scope, implementation boundaries, source map, historical
+  verification, environment caveats, and next-agent startup instructions.
+  This documentation-only transition does not complete or reprioritize M4.
 - Archived the abandoned Ollama/FastAPI/Docker implementation at annotated Git
   tag `archive/legacy-ollama`, targeting commit
   `c0f9c1f5236820fd5d9c717c80e7f44838a3d195`.
@@ -215,11 +219,12 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
 
 ## Work in progress
 
-No implementation unit is currently in progress. This unit started from a clean
-tree after the previous unit was committed and pushed, with no overlapping user
-changes. M1–M4 hosted/native execution remains unverified outside this Linux
-x86-64 environment. The new safety unit is locally verified but does not
-complete M4 profile admission.
+No implementation or documentation unit is currently in progress. The user
+requested an agent-transition export on 2026-09-26; HANDOFF.md and the README
+now provide that context. The handoff started from a clean tree at `9e0384b`,
+with no overlapping user changes. Handoff edits are saved locally, not committed
+or pushed in this unit. M1–M4 hosted/native execution remains unverified outside
+this Linux x86-64 environment. M4 profile admission remains incomplete.
 
 ## Next recommended task
 
@@ -326,6 +331,16 @@ repository or shell startup files. Use the normal rustup setup described in
   never substitutes for enforced process-group/full-session memory admission.
 
 ## Verification
+
+### Agent-transition documentation — 2026-09-26
+
+- **passed:** `python3 scripts/check_docs.py` for Markdown headings, relative
+  file links, and README coverage; `git diff --check` for whitespace errors.
+- **passed:** manual comparison of handoff scope/next task against the plan and
+  checkpoint; source-map paths checked against the working tree. No product
+  decisions, milestone gates, or application files changed.
+- **not run:** Rust/application tests, model downloads, and inference checks
+  (documentation-only task). Earlier results below are historical, not reruns.
 
 ### M4 probe signal and diagnostic memory safety — 2026-09-24
 
@@ -843,3 +858,5 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-23T02:08:25Z | Codex `/root` | Complete M4 real-GGUF diagnostic validation | Added opt-in hash-pinned SmolLM2 fixture test, ran real pinned Linux server from isolated verified install, recorded exact reproduction and release limits; resolves 02:02 entry | `crates/dociler-core/src/model_probe.rs`, `docs/testing-and-release.md`, `docs/models-and-runtime.md`, `CHECKPOINT.md` | passed: real fixture load/generation, 105 regular tests, strict Clippy, fmt, Markdown links, diff; failed then resolved: sandbox loopback denial and formatting; not run: release tests, Lite/Pro, memory/signal/platform/quality gates | COMPLETE; M4 PROFILE ADMISSION PENDING | Add process-group peak memory/limits and CLI signal cancellation, then test real Lite/Pro only after those gates |
 | 2026-09-24T18:22:46Z | Codex `/root` | Continue M4 diagnostic safety gates | Starting clean tree; add measurable child-process memory reporting and scriptable probe signal cancellation, with deterministic tests and documentation; leave local chat and Lite/Pro release admission disabled | Core probe lifecycle/model probe, CLI and integration tests, README/docs, CHECKPOINT.md | not run: new checks pending | IN PROGRESS | Verify cancellation, reaping, memory metric semantics, and platform fallbacks; commit and push after verification |
 | 2026-09-24T18:43:16Z | Codex `/root` | Complete M4 scoped probe-signal and child-RSS diagnostic unit | Added scoped Unix/Windows signal cancellation, Unix child process-group separation, rehash-phase cancellation checks, Linux `VmHWM` observer, CLI output, tests, ADR-023, and honest limits; resolves 18:22 entry | Cargo manifests/lock, core probe/memory modules, CLI signal/main modules, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: 108 debug and optimized regular tests, opt-in real GGUF with 177,229,824-byte child RSS, CLI SIGINT preflight smoke, strict Clippy, fmt, Rust docs, Markdown/diff; failed then resolved: absent temporary crate cache and first fmt check; not run: full process-group/hard limit, actual Lite/Pro cancellation, native non-Linux/hosted/quality gates | COMPLETE; M4 RELEASE ADMISSION PENDING | Implement full process-group peak memory accounting and enforceable constrained-host admission, then attempt pinned Lite/Pro full-context diagnostics |
+| 2026-09-26T18:59:47Z | Codex `/root` | Export agent-transition context | Starting clean tree at `9e0384b`; document conversation priorities, implemented boundaries, next task, source map, and historical verification without application changes | HANDOFF.md, README.md, CHECKPOINT.md | passed: clean-tree inspection; not run: handoff documentation checks pending | IN PROGRESS | Validate links and checkpoint consistency; leave M4 active |
+| 2026-09-26T19:01:56Z | Codex `/root` | Complete agent-transition export | Added resumption guide and conversation context; linked README and checkpoint; preserved M4 scope and all historical activity; resolves 18:59 entry | HANDOFF.md, README.md, CHECKPOINT.md | passed: documentation checker, diff check, manual scope/source-map review; not run: application tests (documentation only), commit/push | COMPLETE; M4 RELEASE ADMISSION PENDING | New agent reads handoff and required documents, inspects Git status, then resumes the canonical M4 task |

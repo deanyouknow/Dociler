@@ -83,6 +83,7 @@ interactive screen; redirected bare invocation safely prints help.
 
 - [Approved implementation plan](IMPLEMENTATION_PLAN.md)
 - [Current project checkpoint](CHECKPOINT.md)
+- [Agent handoff and conversation context](HANDOFF.md)
 - [Instructions for AI agents and contributors](AGENTS.md)
 - [Product requirements](docs/product-requirements.md)
 - [System architecture](docs/architecture.md)
@@ -102,6 +103,8 @@ interactive screen; redirected bare invocation safely prints help.
 Before making changes, read `AGENTS.md`, `IMPLEMENTATION_PLAN.md`, and
 `CHECKPOINT.md`, followed by the documents relevant to the task. Implementation
 has been authorized; the checkpoint tracks the current milestone and next task.
+For the agent transition snapshot and conversation context, also read
+[HANDOFF.md](HANDOFF.md); it supplements, rather than replaces, the checkpoint.
 
 Every agent that makes meaningful progress must update `CHECKPOINT.md` before
 handing off. The checkpoint is the canonical answer to “what is done, what was
