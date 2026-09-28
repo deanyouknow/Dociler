@@ -11,10 +11,16 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use dociler_core::assets::{
+    CacheState, ModelRemoveTarget, VerificationLevel, current_runtime_asset, inspect_cached_asset,
+    model_asset, preview_cached_removal, remove_cached_assets,
+};
 use dociler_core::chat::{
     CancellationToken, ChatError, Generation, GenerationEvent, GenerationPoll, RemoteChatBackend,
 };
+use dociler_core::config::LocalProfile;
 use dociler_core::credentials::{CredentialError, Secret};
+use dociler_core::hardware::{HardwareInventory, ModelPreflight, PreflightStatus};
 use dociler_core::paths::AppPaths;
 use dociler_core::profiles::{
     ProfileEdit, ProfileInstallError, ProfileMutationError, ProfileRemoval, ProfileRotation,
@@ -22,6 +28,7 @@ use dociler_core::profiles::{
     remove_remote_profile, rotate_remote_credential,
 };
 use dociler_core::remote::{RemoteError, RemoteProfile};
+use dociler_core::runtime_install::{RuntimeInstallState, inspect_installed_runtime};
 use dociler_core::session::Session;
 use dociler_core::workspace::Workspace;
 use ratatui::backend::CrosstermBackend;
@@ -171,7 +178,10 @@ pub struct App {
     scroll: u16,
     confirm_clear: bool,
     pending_remove: Option<String>,
+    pending_model_remove: Option<ModelRemoveTarget>,
+    pending_model_repair: Option<LocalProfile>,
     connection_status: ConnectionStatus,
+    active_local: Option<LocalProfile>,
     quit: bool,
 }
 
@@ -203,7 +213,10 @@ impl App {
             scroll: 0,
             confirm_clear: false,
             pending_remove: None,
+            pending_model_remove: None,
+            pending_model_repair: None,
             connection_status: ConnectionStatus::Unknown,
+            active_local: None,
             quit: false,
         };
         app.notice("Welcome to Dociler. Text chat is memory-only; documents and local models are not active.");
@@ -216,6 +229,11 @@ impl App {
             );
         }
         app
+    }
+
+    #[cfg(test)]
+    pub fn active_local_profile(&self) -> Option<LocalProfile> {
+        self.active_local
     }
 
     fn selected_profile(&self) -> Option<&RemoteProfile> {
@@ -329,6 +347,8 @@ impl App {
             self.handle_command(text.as_str());
         } else {
             self.pending_remove = None;
+            self.pending_model_remove = None;
+            self.pending_model_repair = None;
             self.start_generation(text.to_string());
         }
     }
@@ -701,22 +721,37 @@ impl App {
         let confirmed_clear = self.confirm_clear;
         self.confirm_clear = false;
         let pending_remove = self.pending_remove.take();
+        let pending_model_remove = self.pending_model_remove.take();
+        let pending_model_repair = self.pending_model_repair.take();
         let mut parts = input.split_whitespace();
         let command = parts.next().unwrap_or("");
         match command {
             "/help" => self.notice(
-                "/help  /status  /connect [NAME|add|refresh|check NAME|edit NAME|remove NAME|key NAME]  /clear  /exit\nProfile edits and keys are verified before commit; removal requires exact repetition. Esc cancels active work; PageUp/PageDown scroll.",
+                "/help  /status  /model [list|status|info PROFILE|use PROFILE|unload|remove TARGET|repair PROFILE]  /connect [NAME|add|refresh|check NAME|edit NAME|remove NAME|key NAME]  /clear  /exit\nProfile edits, keys, removal, and cache operations require exact repetition when prompted. Esc cancels active work; PageUp/PageDown scroll.",
             ),
             "/status" => {
-                let profile = self
-                    .selected_profile()
-                    .map(|profile| format!("{} ({})", profile.name(), profile.model()))
-                    .unwrap_or_else(|| "none".to_owned());
-                self.notice(format!(
-                    "Workspace: {}\nBackend: Remote\nProfile: {profile}\nConnection: {}\nAccess: read-only\nHistory: memory-only\nLAN API: off",
-                    safe_path(self.workspace.root()),
-                    self.connection_status_text()
-                ));
+                let status_text = if let Some(local) = self.active_local {
+                    format!(
+                        "Workspace: {}\nBackend: Local\nProfile: {}\nStatus: diagnostic only (local chat disabled pending release qualification)\nAccess: read-only\nHistory: memory-only\nLAN API: off",
+                        safe_path(self.workspace.root()),
+                        local.alias()
+                    )
+                } else {
+                    let profile = self
+                        .selected_profile()
+                        .map(|profile| format!("{} ({})", profile.name(), profile.model()))
+                        .unwrap_or_else(|| "none".to_owned());
+                    format!(
+                        "Workspace: {}\nBackend: Remote\nProfile: {profile}\nConnection: {}\nAccess: read-only\nHistory: memory-only\nLAN API: off",
+                        safe_path(self.workspace.root()),
+                        self.connection_status_text()
+                    )
+                };
+                self.notice(status_text);
+            }
+            "/model" => {
+                let arguments = parts.collect::<Vec<_>>();
+                self.handle_model_command(&arguments, pending_model_remove, pending_model_repair);
             }
             "/connect" => {
                 let arguments = parts.collect::<Vec<_>>();
@@ -792,6 +827,7 @@ impl App {
                             .iter()
                             .position(|profile| profile.name() == *name)
                         {
+                            self.active_local = None;
                             self.selected = Some(index);
                             self.session = Some(Session::new(self.workspace.clone()));
                             self.connection_status = ConnectionStatus::Unknown;
@@ -822,7 +858,7 @@ impl App {
                 self.notice("Repeat /clear to erase this in-memory conversation.");
             }
             "/exit" => self.quit = true,
-            "/model" | "/files" | "/permissions" | "/export" | "/turn-on-remote"
+            "/files" | "/permissions" | "/export" | "/turn-on-remote"
             | "/turn-off-remote" | "/update" => self.error(
                 "That command is planned but unavailable in this text-only milestone.",
             ),
@@ -830,7 +866,359 @@ impl App {
         }
     }
 
+    fn handle_model_command(
+        &mut self,
+        arguments: &[&str],
+        pending_remove: Option<ModelRemoveTarget>,
+        pending_repair: Option<LocalProfile>,
+    ) {
+        match arguments {
+            [] | ["list"] => {
+                let inventory = HardwareInventory::inspect(&self.paths.data_dir.join("models"));
+                let mut lines = Vec::new();
+                lines.push("Local model profiles:".to_string());
+                for profile in [LocalProfile::Lite, LocalProfile::Pro] {
+                    let asset = model_asset(profile);
+                    let artifact = asset.artifact();
+                    let inspection =
+                        inspect_cached_asset(&self.paths, artifact, VerificationLevel::Sha256);
+                    let cache_label = cache_state_label(inspection.state());
+                    let preflight = ModelPreflight::evaluate(profile, &inventory);
+                    let preflight_label = preflight_status_label(preflight.status());
+                    let active_marker = if self.active_local == Some(profile) {
+                        " [ACTIVE]"
+                    } else {
+                        ""
+                    };
+                    lines.push(format!(
+                        "  {} ({}): {} · cache: {cache_label} · preflight: {preflight_label}{active_marker}",
+                        profile.alias(),
+                        asset.base_model(),
+                        format_bytes(artifact.byte_size()),
+                    ));
+                }
+                lines.push(String::new());
+                lines.push("Commands:".to_string());
+                lines.push("  /model status              - Show detailed hardware admission & cache details".to_string());
+                lines.push(
+                    "  /model info [PROFILE]      - Show profile and model metadata".to_string(),
+                );
+                lines.push("  /model use PROFILE         - Select a local profile (diagnostic only; local chat disabled)".to_string());
+                lines.push(
+                    "  /model unload              - Unselect active local profile".to_string(),
+                );
+                lines.push("  /model remove TARGET       - Safely remove cached assets (dry-run preview, repeat to confirm)".to_string());
+                lines.push("  /model repair PROFILE      - Inspect and repair invalid assets (repeat to confirm)".to_string());
+                self.notice(lines.join("\n"));
+            }
+            ["status"] => {
+                let inventory = HardwareInventory::inspect(&self.paths.data_dir.join("models"));
+                let total_ram = inventory
+                    .total_memory_bytes()
+                    .map(format_gib)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let avail_ram = inventory
+                    .available_memory_bytes()
+                    .map(format_gib)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let ram_scope = match inventory.memory_scope() {
+                    dociler_core::hardware::MemoryScope::Host => "host",
+                    dociler_core::hardware::MemoryScope::Cgroup => "cgroup",
+                };
+                let disk_space = inventory
+                    .free_disk_bytes()
+                    .map(format_gib)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let cpu_features = if inventory.cpu_features().is_empty() {
+                    "none detected".to_string()
+                } else {
+                    inventory.cpu_features().join(", ")
+                };
+                let lite_preflight = ModelPreflight::evaluate(LocalProfile::Lite, &inventory);
+                let pro_preflight = ModelPreflight::evaluate(LocalProfile::Pro, &inventory);
+
+                let lite_cache = inspect_cached_asset(
+                    &self.paths,
+                    model_asset(LocalProfile::Lite).artifact(),
+                    VerificationLevel::Sha256,
+                );
+                let pro_cache = inspect_cached_asset(
+                    &self.paths,
+                    model_asset(LocalProfile::Pro).artifact(),
+                    VerificationLevel::Sha256,
+                );
+                let runtime_cache = current_runtime_asset().map(|rt| {
+                    inspect_cached_asset(&self.paths, rt.artifact(), VerificationLevel::Sha256)
+                });
+                let runtime_install = current_runtime_asset().map(|rt| {
+                    inspect_installed_runtime(&self.paths, *rt, VerificationLevel::Sha256)
+                });
+
+                let mut lines = Vec::new();
+                lines.push("Hardware & Admission Status:".to_string());
+                lines.push(format!(
+                    "  RAM: {total_ram} total, {avail_ram} available ({ram_scope})"
+                ));
+                lines.push(format!(
+                    "  CPU: {} logical core(s), recommended threads: {}",
+                    inventory.logical_cpu_count(),
+                    inventory.recommended_threads()
+                ));
+                lines.push(format!("  CPU features: {cpu_features}"));
+                lines.push(format!("  Disk available: {disk_space}"));
+                lines.push(format!(
+                    "  Admission Lite: {}",
+                    preflight_status_label(lite_preflight.status())
+                ));
+                lines.push(format!(
+                    "  Admission Pro: {}",
+                    preflight_status_label(pro_preflight.status())
+                ));
+                lines.push(String::new());
+                lines.push("Local Cache Status:".to_string());
+                lines.push(format!(
+                    "  Lite GGUF: {}",
+                    cache_state_label(lite_cache.state())
+                ));
+                lines.push(format!(
+                    "  Pro GGUF: {}",
+                    cache_state_label(pro_cache.state())
+                ));
+                lines.push(format!(
+                    "  Runtime archive: {}",
+                    runtime_cache
+                        .map(|c| cache_state_label(c.state()))
+                        .unwrap_or("unsupported target")
+                ));
+                lines.push(format!(
+                    "  Runtime install: {}",
+                    runtime_install
+                        .map(|i| installed_state_label(i.state()))
+                        .unwrap_or("unsupported target")
+                ));
+                self.notice(lines.join("\n"));
+            }
+            ["info"] => {
+                let target = self.active_local.unwrap_or(LocalProfile::Lite);
+                self.show_model_info(target);
+            }
+            ["info", name] => {
+                let profile = match *name {
+                    "dociler-lite" | "lite" => Some(LocalProfile::Lite),
+                    "dociler-pro" | "pro" => Some(LocalProfile::Pro),
+                    _ => None,
+                };
+                if let Some(profile) = profile {
+                    self.show_model_info(profile);
+                } else {
+                    self.error("Unknown profile. Use 'dociler-lite' or 'dociler-pro'.");
+                }
+            }
+            ["use", name] | [name]
+                if matches!(*name, "dociler-lite" | "lite" | "dociler-pro" | "pro") =>
+            {
+                let profile = match *name {
+                    "dociler-lite" | "lite" => LocalProfile::Lite,
+                    "dociler-pro" | "pro" => LocalProfile::Pro,
+                    _ => unreachable!(),
+                };
+                self.active_local = Some(profile);
+                self.session = Some(Session::new(self.workspace.clone()));
+                self.confirm_clear = false;
+                self.notice(format!(
+                    "Switched to local profile '{}'. Local chat is disabled pending release qualification (8K/16K context, peak RSS <= 5.5/11.5 GiB, quality gates). Use `dociler model load-probe {} --confirm` from the CLI for diagnostic checks, or /connect NAME to switch to a remote profile.",
+                    profile.alias(),
+                    profile.alias(),
+                ));
+            }
+            ["use"] => {
+                self.error("Usage: /model use [dociler-lite|dociler-pro]");
+            }
+            ["unload"] => {
+                if self.active_local.is_some() {
+                    self.active_local = None;
+                    self.session = Some(Session::new(self.workspace.clone()));
+                    self.confirm_clear = false;
+                    self.notice("Local profile unloaded. Returned to remote backend.");
+                } else {
+                    self.notice("No local profile was active.");
+                }
+            }
+            ["remove", target_name] => {
+                let target = match *target_name {
+                    "dociler-lite" | "lite" => Some(ModelRemoveTarget::Profile(LocalProfile::Lite)),
+                    "dociler-pro" | "pro" => Some(ModelRemoveTarget::Profile(LocalProfile::Pro)),
+                    "runtime" => Some(ModelRemoveTarget::Runtime),
+                    "all" => Some(ModelRemoveTarget::All),
+                    _ => None,
+                };
+                let Some(target) = target else {
+                    self.error("Unknown remove target. Use 'dociler-lite', 'dociler-pro', 'runtime', or 'all'.");
+                    return;
+                };
+                if pending_remove == Some(target) {
+                    match remove_cached_assets(&self.paths, target, true) {
+                        Ok(outcome) => {
+                            let active_removed = match target {
+                                ModelRemoveTarget::Profile(p) => self.active_local == Some(p),
+                                ModelRemoveTarget::All => self.active_local.is_some(),
+                                ModelRemoveTarget::Runtime => false,
+                            };
+                            if active_removed {
+                                self.active_local = None;
+                            }
+                            self.notice(format!(
+                                "Removed {} cached asset file(s) for target '{}', freeing {}.",
+                                outcome.removed_paths.len(),
+                                target.label(),
+                                format_bytes(outcome.bytes_freed),
+                            ));
+                        }
+                        Err(err) => {
+                            self.error(format!("Removal failed: {err}"));
+                        }
+                    }
+                } else {
+                    match preview_cached_removal(&self.paths, target) {
+                        Ok(preview) => {
+                            if preview.removed_paths.is_empty() {
+                                self.notice(format!(
+                                    "No cached files found for '{}'.",
+                                    target.label()
+                                ));
+                            } else {
+                                self.pending_model_remove = Some(target);
+                                self.notice(format!(
+                                    "Repeat /model remove {} to permanently delete {} cached file(s) ({} recoverable).",
+                                    target.label(),
+                                    preview.removed_paths.len(),
+                                    format_bytes(preview.bytes_freed),
+                                ));
+                            }
+                        }
+                        Err(err) => {
+                            self.error(format!("Preview failed: {err}"));
+                        }
+                    }
+                }
+            }
+            ["remove"] => {
+                self.error("Usage: /model remove [dociler-lite|dociler-pro|runtime|all]");
+            }
+            ["repair", profile_name] => {
+                let profile = match *profile_name {
+                    "dociler-lite" | "lite" => Some(LocalProfile::Lite),
+                    "dociler-pro" | "pro" => Some(LocalProfile::Pro),
+                    _ => None,
+                };
+                let Some(profile) = profile else {
+                    self.error("Unknown profile. Use 'dociler-lite' or 'dociler-pro'.");
+                    return;
+                };
+                let model_inspection = inspect_cached_asset(
+                    &self.paths,
+                    model_asset(profile).artifact(),
+                    VerificationLevel::Sha256,
+                );
+                let runtime_archive = current_runtime_asset().map(|rt| {
+                    inspect_cached_asset(&self.paths, rt.artifact(), VerificationLevel::Sha256)
+                });
+                let runtime_install = current_runtime_asset().map(|rt| {
+                    inspect_installed_runtime(&self.paths, *rt, VerificationLevel::Sha256)
+                });
+
+                let model_ok = model_inspection.state().is_verified();
+                let runtime_archive_ok = runtime_archive
+                    .as_ref()
+                    .is_some_and(|a| a.state().is_verified());
+                let runtime_install_ok = runtime_install
+                    .as_ref()
+                    .is_some_and(|i| i.state().is_verified());
+
+                if model_ok && runtime_archive_ok && runtime_install_ok {
+                    self.notice(format!(
+                        "All assets for '{}' and the runtime are verified. No repair required.",
+                        profile.alias(),
+                    ));
+                    return;
+                }
+
+                if pending_repair == Some(profile) {
+                    if !model_ok && *model_inspection.state() != CacheState::Missing {
+                        let _ = remove_cached_assets(
+                            &self.paths,
+                            ModelRemoveTarget::Profile(profile),
+                            true,
+                        );
+                    }
+                    let purge_runtime = (!runtime_archive_ok
+                        && runtime_archive.as_ref().map(|a| a.state())
+                            != Some(&CacheState::Missing))
+                        || (!runtime_install_ok
+                            && runtime_install.as_ref().map(|i| i.state())
+                                != Some(RuntimeInstallState::Missing));
+                    if purge_runtime {
+                        let _ = remove_cached_assets(&self.paths, ModelRemoveTarget::Runtime, true);
+                    }
+                    self.notice(format!(
+                        "Corrupted/invalid assets for '{}' were purged. Run `dociler model repair {} --confirm` or `dociler model download {} --confirm` from the CLI to complete network download and verification.",
+                        profile.alias(),
+                        profile.alias(),
+                        profile.alias(),
+                    ));
+                } else {
+                    self.pending_model_repair = Some(profile);
+                    self.notice(format!(
+                        "Repair required for '{}': model={}, runtime_archive={}, runtime_install={}.\nRepeat /model repair {} to purge invalid assets and prepare for re-download.",
+                        profile.alias(),
+                        if model_ok { "verified" } else { "needs repair" },
+                        if runtime_archive_ok { "verified" } else { "needs repair" },
+                        if runtime_install_ok { "verified" } else { "needs repair" },
+                        profile.alias(),
+                    ));
+                }
+            }
+            ["repair"] => {
+                self.error("Usage: /model repair [dociler-lite|dociler-pro]");
+            }
+            _ => {
+                self.error(
+                    "Usage: /model, /model status, /model info PROFILE, /model use PROFILE, /model unload, /model remove TARGET, or /model repair PROFILE",
+                );
+            }
+        }
+    }
+
+    fn show_model_info(&mut self, profile: LocalProfile) {
+        let asset = model_asset(profile);
+        let artifact = asset.artifact();
+        let reqs = dociler_core::hardware::ModelRequirements::for_profile(profile);
+        let text = format!(
+            "Profile: {}\nBase model: {}\nRepository: {}\nRevision: {}\nLicense: {}\nArtifact: {} ({})\nSHA-256: {}\nContext: {} tokens\nRAM required: {} (min {})\nDisk required: {}\nQualification: Local chat is disabled pending 8K/16K context, peak RSS <= 5.5/11.5 GiB, and quality gates.",
+            profile.alias(),
+            asset.base_model(),
+            asset.repository(),
+            asset.revision(),
+            asset.license(),
+            artifact.file_name(),
+            format_bytes(artifact.byte_size()),
+            artifact.sha256(),
+            reqs.context_tokens(),
+            format_gb(reqs.supported_total_memory_bytes()),
+            format_gb(reqs.minimum_total_memory_bytes()),
+            format_gb(reqs.required_free_disk_bytes()),
+        );
+        self.notice(text);
+    }
+
     fn start_generation(&mut self, prompt: String) {
+        if let Some(local) = self.active_local {
+            let name = local.alias();
+            self.error(format!(
+                "Local chat for '{name}' is disabled pending release qualification (8K/16K context, peak RSS <= 5.5/11.5 GiB, quality gates). Use `dociler model load-probe {name} --confirm` from the CLI for diagnostic checks, or /connect NAME to switch to a remote profile."
+            ));
+            return;
+        }
         match self.refresh_profiles_from_disk(false) {
             Some(false) => {}
             Some(true) => {
@@ -963,6 +1351,7 @@ impl App {
                             self.session = Some(Session::new(self.workspace.clone()));
                         }
                     }
+                    self.active_local = None;
                     self.connection_status = ConnectionStatus::Ready(name.clone());
                     self.onboarding = None;
                     self.notice(format!(
@@ -1286,6 +1675,60 @@ fn safe_path(path: &std::path::Path) -> String {
         .collect()
 }
 
+fn cache_state_label(state: &CacheState) -> &'static str {
+    match state {
+        CacheState::Missing => "missing",
+        CacheState::PresentUnverified => "present; checksum not run",
+        CacheState::Verified => "verified",
+        CacheState::SizeMismatch { .. } => "size mismatch",
+        CacheState::HashMismatch { .. } => "hash mismatch",
+        CacheState::UnsafeFileType => "unsafe file type",
+        CacheState::Unreadable(_) => "unreadable",
+        CacheState::Cancelled => "cancelled",
+    }
+}
+
+fn installed_state_label(state: RuntimeInstallState) -> &'static str {
+    match state {
+        RuntimeInstallState::Missing => "missing",
+        RuntimeInstallState::PresentUnverified => "present; checksum not run",
+        RuntimeInstallState::Verified => "verified",
+        RuntimeInstallState::Invalid => "invalid",
+        RuntimeInstallState::Cancelled => "cancelled",
+    }
+}
+
+fn preflight_status_label(status: PreflightStatus) -> &'static str {
+    match status {
+        PreflightStatus::ReadyForRuntimeProbe => "ready for probe",
+        PreflightStatus::ExperimentalForRuntimeProbe => "experimental (6–8 GB)",
+        PreflightStatus::InsufficientTotalMemory => "insufficient RAM",
+        PreflightStatus::InsufficientAvailableMemory => "low available RAM",
+        PreflightStatus::InsufficientDisk => "insufficient disk",
+        PreflightStatus::InventoryIncomplete => "hardware inventory incomplete",
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.2} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+fn format_gib(bytes: u64) -> String {
+    format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
+fn format_gb(bytes: u64) -> String {
+    format!("{:.2} GB", bytes as f64 / 1_000_000_000.0)
+}
+
 fn render(frame: &mut Frame<'_>, app: &App) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
@@ -1297,11 +1740,21 @@ fn render(frame: &mut Frame<'_>, app: &App) {
         ])
         .split(frame.area());
 
-    let profile = app
-        .selected_profile()
-        .map(|profile| format!("{} · {}", profile.name(), profile.model()))
-        .unwrap_or_else(|| "no remote profile".to_owned());
-    let connection = app.connection_badge();
+    let (backend_label, profile_label, connection_label) = if let Some(local) = app.active_local {
+        (
+            "Local",
+            format!("{} · local chat disabled", local.alias()),
+            "diagnostic only",
+        )
+    } else {
+        (
+            "Remote",
+            app.selected_profile()
+                .map(|profile| format!("{} · {}", profile.name(), profile.model()))
+                .unwrap_or_else(|| "no remote profile".to_owned()),
+            app.connection_badge(),
+        )
+    };
     let header = Paragraph::new(vec![
         Line::from(Span::styled(
             "DOCILER",
@@ -1310,7 +1763,7 @@ fn render(frame: &mut Frame<'_>, app: &App) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(format!(
-            "Remote · {profile} · {connection} · read-only · memory-only · API off"
+            "{backend_label} · {profile_label} · {connection_label} · read-only · memory-only · API off"
         )),
     ])
     .block(Block::default().borders(Borders::ALL));
@@ -1882,5 +2335,122 @@ mod tests {
         );
         command(&mut app, "/back");
         assert_eq!(app.onboarding.as_ref().unwrap().step, OnboardingStep::Model);
+    }
+
+    #[test]
+    fn model_list_status_and_info_commands_in_tui() {
+        let (_dir, mut app) = app();
+        command(&mut app, "/model");
+        let list = app.transcript.last().unwrap().text.as_str();
+        assert!(list.contains("Local model profiles:"));
+        assert!(list.contains("dociler-lite"));
+        assert!(list.contains("dociler-pro"));
+        assert!(list.contains("/model status"));
+
+        command(&mut app, "/model status");
+        let status = app.transcript.last().unwrap().text.as_str();
+        assert!(status.contains("Hardware & Admission Status:"));
+        assert!(status.contains("RAM:"));
+        assert!(status.contains("CPU:"));
+        assert!(status.contains("Disk available:"));
+        assert!(status.contains("Admission Lite:"));
+        assert!(status.contains("Admission Pro:"));
+        assert!(status.contains("Local Cache Status:"));
+
+        command(&mut app, "/model info dociler-lite");
+        let info = app.transcript.last().unwrap().text.as_str();
+        assert!(info.contains("dociler-lite"));
+        assert!(info.contains("Qwen3.5 4B"));
+        assert!(info.contains("Apache-2.0"));
+        assert!(info.contains("8192 tokens"));
+        assert!(info.contains("Local chat is disabled"));
+
+        command(&mut app, "/model info unknown");
+        let error = app.transcript.last().unwrap().text.as_str();
+        assert!(error.contains("Unknown profile"));
+    }
+
+    #[test]
+    fn model_use_and_prompting_disabled_in_tui() {
+        let (_dir, mut app) = app();
+        assert_eq!(app.active_local_profile(), None);
+
+        command(&mut app, "/model use dociler-lite");
+        assert_eq!(app.active_local_profile(), Some(LocalProfile::Lite));
+        let switch_msg = app.transcript.last().unwrap().text.as_str();
+        assert!(switch_msg.contains("Switched to local profile 'dociler-lite'"));
+        assert!(switch_msg.contains("Local chat is disabled"));
+
+        command(&mut app, "/status");
+        let status = app.transcript.last().unwrap().text.as_str();
+        assert!(status.contains("Backend: Local"));
+        assert!(status.contains("Profile: dociler-lite"));
+        assert!(status.contains("diagnostic only"));
+
+        // Prompting while local profile is active must fail without starting generation
+        command(&mut app, "Hello local model");
+        assert!(app.generation.is_none());
+        assert_eq!(app.activity, Activity::Ready);
+        let prompt_err = app.transcript.last().unwrap().text.as_str();
+        assert!(prompt_err.contains("Local chat for 'dociler-lite' is disabled"));
+
+        // Switching back to remote via /connect
+        command(&mut app, "/connect two");
+        assert_eq!(app.active_local_profile(), None);
+        assert_eq!(app.selected_profile().unwrap().name(), "two");
+
+        // Selecting pro and unloading
+        command(&mut app, "/model use dociler-pro");
+        assert_eq!(app.active_local_profile(), Some(LocalProfile::Pro));
+        command(&mut app, "/model unload");
+        assert_eq!(app.active_local_profile(), None);
+        let unload_msg = app.transcript.last().unwrap().text.as_str();
+        assert!(unload_msg.contains("Local profile unloaded"));
+    }
+
+    #[test]
+    fn model_remove_and_repair_in_tui_require_confirmation() {
+        let (_dir, mut app) = app();
+
+        // Model remove when empty reports no files found
+        command(&mut app, "/model remove dociler-lite");
+        let empty_preview = app.transcript.last().unwrap().text.as_str();
+        assert!(empty_preview.contains("No cached files found"));
+
+        // Stage a cached model file
+        let asset = model_asset(LocalProfile::Lite);
+        let path = asset.artifact().cache_path(&app.paths);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"test-model-content").unwrap();
+        assert!(path.exists());
+
+        // First remove command previews and requests repetition
+        command(&mut app, "/model remove dociler-lite");
+        assert_eq!(
+            app.pending_model_remove,
+            Some(ModelRemoveTarget::Profile(LocalProfile::Lite))
+        );
+        let preview_msg = app.transcript.last().unwrap().text.as_str();
+        assert!(preview_msg.contains("Repeat /model remove dociler-lite"));
+
+        // Exact repetition deletes the file
+        command(&mut app, "/model remove dociler-lite");
+        assert_eq!(app.pending_model_remove, None);
+        assert!(!path.exists());
+        let remove_msg = app.transcript.last().unwrap().text.as_str();
+        assert!(remove_msg.contains("Removed 1 cached asset file(s)"));
+
+        // Model repair requests confirmation when missing
+        command(&mut app, "/model repair dociler-lite");
+        assert_eq!(app.pending_model_repair, Some(LocalProfile::Lite));
+        let repair_msg = app.transcript.last().unwrap().text.as_str();
+        assert!(repair_msg.contains("Repair required for 'dociler-lite'"));
+        assert!(repair_msg.contains("Repeat /model repair dociler-lite"));
+
+        // Repetition confirms repair
+        command(&mut app, "/model repair dociler-lite");
+        assert_eq!(app.pending_model_repair, None);
+        let repair_done = app.transcript.last().unwrap().text.as_str();
+        assert!(repair_done.contains("purged"));
     }
 }

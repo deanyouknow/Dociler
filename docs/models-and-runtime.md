@@ -283,6 +283,16 @@ diagnostic inspection of what requires repair.
 interrupts (SIGINT/SIGTERM/Ctrl+C) cancel active transfers immediately and
 preserve `.partial` files for subsequent resumption.
 
+The interactive terminal experience exposes `/model` with subcommands `list`,
+`status`, `info [PROFILE]`, `use PROFILE`, `unload`, `remove TARGET`, and
+`repair PROFILE`. Users can inspect local profile cache state and hardware
+admission without leaving the TUI. Selecting a local profile switches the active
+target to Local in diagnostic mode; conversation context is reset, and prompts
+return actionable notices indicating that local chat remains disabled until
+release qualification gates pass. Destructive cache removal (`/model remove`) and
+repair (`/model repair`) inside the TUI dry-run first and require exact command
+repetition before modifying disk state.
+
 ## Qualification gates
 
 Primary and fallback candidates run the identical versioned corpus and runtime
