@@ -249,7 +249,21 @@ also returned cancellation after SIGINT during preflight; no server was left
 running. Deterministic unit tests verify that asset verification and installed
 runtime inventory hashing stop immediately when the cancellation token is
 tripped, returning cancelled status without publishing or caching unverified files.
-These checks do not establish full process-
-group memory accounting, hard memory enforcement, signal cancellation of a
-multi-gigabyte model load, or native macOS/Windows signal behavior. Those remain
-explicit release gates.
+The process-group peak memory accounting unit adds concurrent process-group
+RSS sampling (Dociler host process, sidecar child process, and any sidecar child
+descendants via `/proc/<pid>/task/<pid>/children`) and an enforceable memory
+ceiling guard. Deterministic Linux tests verify that non-labeled memory units are
+rejected (`parses_only_labeled_memory_units`), combined current process RSS is
+observed (`observes_current_process_and_combined_memory`), ceiling breaches
+trip cancellation and report structured abort details
+(`memory_ceiling_breach_triggers_cancellation_and_abort`), the model probe
+aborts cleanly and reaps the child process upon ceiling breach
+(`memory_ceiling_breach_aborts_probe_and_reaps_child`), and experimental or
+incomplete hardware preflight states fail closed without explicit opt-in
+(`hardware_gate_rejects_experimental_and_incomplete_states`). The opt-in real
+SmolLM2 135M fixture test additionally verifies that process-group peak RSS is
+reported and strictly greater than zero alongside server-only peak RSS. These
+checks establish measurable memory telemetry and active ceiling enforcement
+during diagnostic probing; full-context 8K/16K extended workloads, multi-GB
+pinned Lite/Pro qualification, and native non-Linux memory telemetry remain
+outstanding release gates.

@@ -414,3 +414,34 @@ inspections are never mistakenly published or cached as valid.
 or detached upon signal, treating cancelled verification as asset corruption (which
 could prompt unwanted re-downloads or repairs), or bypassing SHA-256 integrity checks
 when uncancelled.
+
+## ADR-025: Process-group peak RSS accounting and enforceable constrained-host memory ceiling guard
+
+**Decision:** Sample concurrent resident set size (RSS) across the entire process
+group—including the Dociler host process (`parent_pid`), the sidecar server
+(`child_pid`), and any descendant tasks spawned by the sidecar (discovered via
+`/proc/<pid>/task/<pid>/children` on Linux)—rather than reporting only the sidecar's
+kernel `VmHWM`. Provide an enforceable memory ceiling guard (`memory_ceiling_bytes`)
+during model probing that trips cooperative cancellation and deterministically stops
+and reaps child processes immediately upon breach. Enforce strict fail-closed
+hardware admission: experimental 6–8 GB Lite tiers require explicit opt-in
+(`allow_experimental = true`) and are otherwise refused, while insufficient or
+incomplete hardware configurations always fail closed. On non-Linux platforms where
+procfs process-group traversal is unavailable, report process-group peak RSS as
+`None` (“unavailable”) rather than returning zero or misleading partial readings.
+
+**Why:** A single process `VmHWM` metric only measures the sidecar's individual peak
+memory, completely blind to Dociler's memory footprint, sidecar worker threads or
+child processes, document buffers, and concurrent tasks. On constrained hosts
+(e.g., 6–8 GB or tight memory containers), unmonitored model loading risks
+triggering an operating system Out-Of-Memory (OOM) kill that terminates processes
+abruptly without running cleanup handlers, releasing temporary resources, or
+producing actionable diagnostics. Combining concurrent RSS sampling with an active
+ceiling guard ensures early detection, clean cooperative cancellation, and
+deterministic process reaping before host memory limits are breached.
+
+**Rejected:** Relying on single-process `VmHWM` as the sole qualification metric,
+guessing or reporting zero for unavailable metrics on non-Linux platforms,
+silently admitting the experimental 6–8 GB Lite tier without explicit opt-in,
+allowing lingering background sidecars upon memory limit breaches, or trusting
+untested memory limits without active enforcement.

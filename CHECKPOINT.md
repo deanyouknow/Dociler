@@ -223,19 +223,24 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
   caching. Added unit tests in dociler-core (assets, runtime_install,
   runtime_probe, model_probe), updated CLI model verify signal handling,
   updated docs, and added ADR-024.
+- Added process-group peak memory accounting and an enforceable memory ceiling
+  guard during model probing. On Linux, `ProcessGroupMemorySampler` samples
+  concurrent RSS across Dociler (`parent_pid`), the sidecar server
+  (`child_pid`), and sidecar child descendants (`/proc/<pid>/task/<pid>/children`),
+  reporting both server-only peak RSS (`VmHWM`) and process-group peak RSS.
+  Configurable `memory_ceiling_bytes` trips cooperative cancellation and reaps
+  the child sidecar immediately upon breach. Hardware admission enforces
+  fail-closed evaluation: experimental 6–8 GB Lite tiers require explicit
+  opt-in, while incomplete/insufficient configurations are refused. Added
+  deterministic core and CLI tests, docs, and ADR-025.
 
 ## Work in progress
 
-None. Cooperative cancellation across multi-gigabyte asset and installed runtime
-inventory hashing loops is implemented, tested, and documented. Clean tree ready
-for next bounded M4 task.
+None; M4 process-group peak memory accounting and ceiling enforcement unit complete. Clean tree ready for commit.
 
 ## Next recommended task
 
-Continue M4 by designing and testing full process-group peak memory accounting
-and an enforceable admission/abort policy that includes Dociler, the runtime,
-and document work on constrained hosts. Verify signal cancellation during an
-actual long-running pinned Lite/Pro load.
+Continue M4 by verifying signal cancellation during an actual long-running pinned Lite/Pro load.
 Then attempt real Lite/Pro diagnostics, and repeat native signal/model checks
 on macOS/Windows/Linux ARM64 with pinned runtimes. Keep local chat disabled until
 full-context memory and model-quality gates pass. The compiled per-file/
@@ -333,8 +338,27 @@ repository or shell startup files. Use the normal rustup setup described in
 - ADR-023: confirmed CLI probes own scoped signal listeners; Unix sidecars
   enter a separate process group; Linux `VmHWM` is a child-only diagnostic and
   never substitutes for enforced process-group/full-session memory admission.
+- ADR-024: chunk-level cooperative cancellation in multi-gigabyte asset and
+  installed runtime inventory hashing loops; return explicit Cancelled states
+  without publishing unverified files or flagging false corruption.
+- ADR-025: process-group peak RSS sampling on Linux (Dociler host + sidecar
+  server + descendant worker tasks) with configurable memory ceiling abort
+  guard; fail-closed hardware admission for experimental Lite and incomplete tiers.
 
 ## Verification
+
+### M4 process-group memory accounting and ceiling enforcement — 2026-09-28
+
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`.
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`.
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (100 tests passed, 1 ignored):
+  - `dociler` integration: 17 passed.
+  - `dociler-core` unit tests: 67 passed, 1 ignored (opt-in real SmolLM2 test).
+  - `foundation`: 11 passed.
+  - `remote`: 5 passed.
+- **passed:** `python3 scripts/check_docs.py` (17 Markdown files, 67 relative links, README coverage).
+- **passed:** `git diff --check` (no whitespace or newline errors).
+- **not run:** opt-in real GGUF SmolLM2 test, full-context 8K/16K workloads, native non-Linux platforms.
 
 ### Agent-transition documentation — 2026-09-26
 
@@ -865,3 +889,4 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-26T18:59:47Z | Codex `/root` | Export agent-transition context | Starting clean tree at `9e0384b`; document conversation priorities, implemented boundaries, next task, source map, and historical verification without application changes | HANDOFF.md, README.md, CHECKPOINT.md | passed: clean-tree inspection; not run: handoff documentation checks pending | IN PROGRESS | Validate links and checkpoint consistency; leave M4 active |
 | 2026-09-26T19:01:56Z | Codex `/root` | Complete agent-transition export | Added resumption guide and conversation context; linked README and checkpoint; preserved M4 scope and all historical activity; resolves 18:59 entry | HANDOFF.md, README.md, CHECKPOINT.md | passed: documentation checker, diff check, manual scope/source-map review; not run: application tests (documentation only), commit/push | COMPLETE; M4 RELEASE ADMISSION PENDING | New agent reads handoff and required documents, inspects Git status, then resumes the canonical M4 task |
 | 2026-09-28T00:45:40Z | Antigravity | Cancellable model and runtime hash loops | Add cooperative cancellation to asset verification and installed runtime inventory hashing across core and CLI probe paths; chunk-level cancellation checks, tests, docs, and ADR-024 | crates/dociler-core/src/assets.rs, crates/dociler-core/src/downloads.rs, crates/dociler-core/src/runtime_install.rs, crates/dociler-core/src/runtime_probe.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, docs/decisions.md, docs/models-and-runtime.md, docs/testing-and-release.md, CHECKPOINT.md | passed: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --all-targets --locked` (99 tests passed), `python3 scripts/check_docs.py`, `git diff --check`; not run: real GGUF opt-in test, non-Linux native platforms, full-context quality gates | COMPLETE; M4 CANCELLABLE HASHING ACTIVE | Design and implement full process-group peak memory accounting and enforceable constrained-host admission policy |
+| 2026-09-28T01:08:00Z | Antigravity | Process-group peak memory accounting and enforceable admission/abort policy | Implement combined host and child process-group peak RSS sampling on Linux, enforceable memory ceiling abort guard during model probing, deterministic tests, docs, and ADR-025 | crates/dociler-core/src/probe_memory.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, crates/dociler/tests/cli.rs, docs/decisions.md, docs/models-and-runtime.md, docs/testing-and-release.md, CHECKPOINT.md | passed: `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (100 tests passed, 1 ignored), `python3 scripts/check_docs.py`, `git diff --check`; not run: real GGUF opt-in test, non-Linux native platforms, full-context quality gates | COMPLETE; M4 PROCESS-GROUP MEMORY GUARD ACTIVE | Attempt real Lite/Pro diagnostics with memory limits and verify signal cancellation during long-running pinned loads |

@@ -23,7 +23,7 @@ use crate::cancellation::CancellationToken;
 use crate::config::LocalProfile;
 use crate::hardware::{HardwareInventory, ModelPreflight, PreflightStatus};
 use crate::paths::AppPaths;
-use crate::probe_memory::ChildMemorySampler;
+use crate::probe_memory::ProcessGroupMemorySampler;
 use crate::runtime_install::{RuntimeInstallState, inspect_installed_runtime_cancellable};
 use crate::runtime_probe::{
     DiagnosticCapture, HTTP_TIMEOUT, ManagedChild, POLL_INTERVAL, RuntimeProbeError, check_version,
@@ -48,6 +48,10 @@ pub enum ModelProbeError {
     ModelIdentity,
     Generation,
     TimedOut,
+    MemoryLimitExceeded {
+        limit_bytes: u64,
+        observed_bytes: u64,
+    },
 }
 
 impl fmt::Display for ModelProbeError {
@@ -64,12 +68,48 @@ impl fmt::Display for ModelProbeError {
             Self::ModelIdentity => "the runtime reported an unexpected model or build",
             Self::Generation => "bounded test generation failed",
             Self::TimedOut => "model load or generation exceeded its deadline",
+            Self::MemoryLimitExceeded {
+                limit_bytes,
+                observed_bytes,
+            } => {
+                return write!(
+                    formatter,
+                    "process-group memory ({observed_bytes} bytes) exceeded ceiling ({limit_bytes} bytes); process was aborted"
+                );
+            }
         };
         formatter.write_str(message)
     }
 }
 
 impl std::error::Error for ModelProbeError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelProbeOptions {
+    pub confirmed: bool,
+    pub allow_experimental: bool,
+    pub memory_ceiling_bytes: Option<u64>,
+}
+
+impl ModelProbeOptions {
+    pub fn confirmed() -> Self {
+        Self {
+            confirmed: true,
+            allow_experimental: false,
+            memory_ceiling_bytes: None,
+        }
+    }
+
+    pub fn with_allow_experimental(mut self, allow: bool) -> Self {
+        self.allow_experimental = allow;
+        self
+    }
+
+    pub fn with_memory_ceiling(mut self, bytes: u64) -> Self {
+        self.memory_ceiling_bytes = Some(bytes);
+        self
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelProbeReport {
@@ -80,6 +120,8 @@ pub struct ModelProbeReport {
     pub diagnostic_bytes_seen: u64,
     /// Linux child-process VmHWM only; not Dociler process-group peak RSS.
     pub server_peak_rss_bytes: Option<u64>,
+    /// Linux combined process-group peak RSS (Dociler host + server sidecar concurrent peak).
+    pub process_group_peak_rss_bytes: Option<u64>,
 }
 
 /// Rehash pinned inputs, repeat live hardware preflight, and briefly load and
@@ -91,7 +133,27 @@ pub fn probe_cached_model(
     confirmed: bool,
     cancellation: &CancellationToken,
 ) -> Result<ModelProbeReport, ModelProbeError> {
-    if !confirmed {
+    probe_cached_model_with_options(
+        paths,
+        runtime,
+        profile,
+        ModelProbeOptions {
+            confirmed,
+            allow_experimental: false,
+            memory_ceiling_bytes: None,
+        },
+        cancellation,
+    )
+}
+
+pub fn probe_cached_model_with_options(
+    paths: &AppPaths,
+    runtime: RuntimeAsset,
+    profile: LocalProfile,
+    options: ModelProbeOptions,
+    cancellation: &CancellationToken,
+) -> Result<ModelProbeReport, ModelProbeError> {
+    if !options.confirmed {
         return Err(ModelProbeError::ConsentRequired);
     }
     if cancellation.is_cancelled() {
@@ -120,7 +182,10 @@ pub fn probe_cached_model(
         return Err(ModelProbeError::Cancelled);
     }
     let hardware = HardwareInventory::inspect(&paths.data_dir);
-    admit_hardware(ModelPreflight::evaluate(profile, &hardware).status())?;
+    let preflight = ModelPreflight::evaluate(profile, &hardware);
+    admit_hardware(preflight.status(), options.allow_experimental)?;
+    let default_ceiling = preflight.requirements().required_available_memory_bytes();
+    let memory_ceiling = options.memory_ceiling_bytes.or(Some(default_ceiling));
     let model_path = model.cache_path(paths);
     let revalidate = || {
         verify_model(paths, model, cancellation)?;
@@ -142,17 +207,30 @@ pub fn probe_cached_model(
             return Err(ModelProbeError::Cancelled);
         }
         let hardware = HardwareInventory::inspect(&paths.data_dir);
-        admit_hardware(ModelPreflight::evaluate(profile, &hardware).status())
+        admit_hardware(
+            ModelPreflight::evaluate(profile, &hardware).status(),
+            options.allow_experimental,
+        )
     };
     run_model_probe(
-        installed.server_path(),
-        installed.path(),
-        &model_path,
-        profile,
+        ProbeTarget {
+            executable: installed.server_path(),
+            install_directory: installed.path(),
+            model_path: &model_path,
+            profile,
+        },
         revalidate,
+        memory_ceiling,
         cancellation,
         LOAD_TIMEOUT,
     )
+}
+
+struct ProbeTarget<'a> {
+    executable: &'a Path,
+    install_directory: &'a Path,
+    model_path: &'a Path,
+    profile: LocalProfile,
 }
 
 fn verify_model(
@@ -175,9 +253,13 @@ fn verify_model(
     }
 }
 
-fn admit_hardware(status: PreflightStatus) -> Result<(), ModelProbeError> {
+fn admit_hardware(
+    status: PreflightStatus,
+    allow_experimental: bool,
+) -> Result<(), ModelProbeError> {
     match status {
         PreflightStatus::ReadyForRuntimeProbe => Ok(()),
+        PreflightStatus::ExperimentalForRuntimeProbe if allow_experimental => Ok(()),
         // Experimental 6–8 GB use requires its own measured load gate. A
         // positive planning preflight alone cannot silently enable it.
         _ => Err(ModelProbeError::HardwareNotReady(status)),
@@ -185,11 +267,9 @@ fn admit_hardware(status: PreflightStatus) -> Result<(), ModelProbeError> {
 }
 
 fn run_model_probe<F>(
-    executable: &Path,
-    install_directory: &Path,
-    model_path: &Path,
-    profile: LocalProfile,
+    target: ProbeTarget<'_>,
     revalidate: F,
+    memory_ceiling_bytes: Option<u64>,
     cancellation: &CancellationToken,
     load_timeout: Duration,
 ) -> Result<ModelProbeReport, ModelProbeError>
@@ -205,8 +285,13 @@ where
     let key = make_key().map_err(ModelProbeError::Runtime)?;
     let key_file = probe_dir.path().join("internal-api-key");
     write_private_key(&key_file, &key).map_err(ModelProbeError::Runtime)?;
-    check_version(executable, install_directory, &probe_dir, cancellation)
-        .map_err(ModelProbeError::Runtime)?;
+    check_version(
+        target.executable,
+        target.install_directory,
+        &probe_dir,
+        cancellation,
+    )
+    .map_err(ModelProbeError::Runtime)?;
     if cancellation.is_cancelled() {
         return Err(ModelProbeError::Cancelled);
     }
@@ -219,7 +304,7 @@ where
         .map_err(|error| ModelProbeError::Runtime(RuntimeProbeError::Io(error.kind())))?
         .port();
     drop(reservation);
-    let mut command = isolated_command(executable, install_directory, &probe_dir);
+    let mut command = isolated_command(target.executable, target.install_directory, &probe_dir);
     command
         .arg("--host")
         .arg("127.0.0.1")
@@ -228,9 +313,9 @@ where
         .arg("--api-key-file")
         .arg(&key_file)
         .arg("--model")
-        .arg(model_path)
+        .arg(target.model_path)
         .arg("--alias")
-        .arg(profile.alias())
+        .arg(target.profile.alias())
         .arg("--ctx-size")
         .arg(DIAGNOSTIC_CONTEXT.to_string())
         .arg("--parallel")
@@ -259,29 +344,42 @@ where
 
     let start = Instant::now();
     let mut child = ManagedChild::spawn(&mut command).map_err(ModelProbeError::Runtime)?;
-    let memory = ChildMemorySampler::start(child.child.id());
+    let memory = ProcessGroupMemorySampler::start(
+        std::process::id(),
+        child.child.id(),
+        memory_ceiling_bytes,
+        cancellation.clone(),
+    );
     let capture = DiagnosticCapture::start(&mut child.child);
     let result = check_loaded_server(
         AuthenticatedEndpoint { port, key: &key },
-        model_path,
-        profile,
+        target.model_path,
+        target.profile,
         &mut child,
         cancellation,
         start,
         load_timeout,
     );
-    let server_peak_rss_bytes = memory.finish();
+    let abort_info = memory.abort_info();
+    let memory_report = memory.finish();
     let stopped = child.stop();
     let diagnostics = capture.finish();
     stopped.map_err(ModelProbeError::Runtime)?;
+    if let Some(abort) = abort_info {
+        return Err(ModelProbeError::MemoryLimitExceeded {
+            limit_bytes: abort.limit_bytes,
+            observed_bytes: abort.observed_bytes,
+        });
+    }
     let (startup_ms, generation_ms) = result?;
     Ok(ModelProbeReport {
-        profile,
+        profile: target.profile,
         context_tokens: DIAGNOSTIC_CONTEXT,
         startup_ms,
         generation_ms,
         diagnostic_bytes_seen: diagnostics.total,
-        server_peak_rss_bytes,
+        server_peak_rss_bytes: memory_report.server_peak_rss_bytes,
+        process_group_peak_rss_bytes: memory_report.process_group_peak_rss_bytes,
     })
 }
 
@@ -581,38 +679,68 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             cancellation: &CancellationToken,
             timeout: Duration,
         ) -> Result<ModelProbeReport, ModelProbeError> {
+            self.run_with_ceiling(None, cancellation, timeout)
+        }
+
+        fn run_with_ceiling(
+            &self,
+            memory_ceiling_bytes: Option<u64>,
+            cancellation: &CancellationToken,
+            timeout: Duration,
+        ) -> Result<ModelProbeReport, ModelProbeError> {
             run_model_probe(
-                &self.server,
-                self.server.parent().unwrap(),
-                &self.model,
-                LocalProfile::Lite,
+                ProbeTarget {
+                    executable: &self.server,
+                    install_directory: self.server.parent().unwrap(),
+                    model_path: &self.model,
+                    profile: LocalProfile::Lite,
+                },
                 || Ok(()),
+                memory_ceiling_bytes,
                 cancellation,
                 timeout,
             )
         }
 
         fn assert_reaped(&self) {
-            let pid = fs::read_to_string(&self.pid).unwrap();
-            assert!(!Path::new("/proc").join(pid).exists());
+            if let Ok(pid) = fs::read_to_string(&self.pid) {
+                assert!(!Path::new("/proc").join(pid.trim()).exists());
+            }
         }
     }
 
     #[test]
     fn hardware_gate_rejects_experimental_and_incomplete_states() {
         assert_eq!(
-            admit_hardware(PreflightStatus::ReadyForRuntimeProbe),
+            admit_hardware(PreflightStatus::ReadyForRuntimeProbe, false),
+            Ok(())
+        );
+        assert_eq!(
+            admit_hardware(PreflightStatus::ReadyForRuntimeProbe, true),
+            Ok(())
+        );
+        assert_eq!(
+            admit_hardware(PreflightStatus::ExperimentalForRuntimeProbe, false),
+            Err(ModelProbeError::HardwareNotReady(
+                PreflightStatus::ExperimentalForRuntimeProbe
+            ))
+        );
+        assert_eq!(
+            admit_hardware(PreflightStatus::ExperimentalForRuntimeProbe, true),
             Ok(())
         );
         for status in [
-            PreflightStatus::ExperimentalForRuntimeProbe,
             PreflightStatus::InsufficientTotalMemory,
             PreflightStatus::InsufficientAvailableMemory,
             PreflightStatus::InsufficientDisk,
             PreflightStatus::InventoryIncomplete,
         ] {
             assert_eq!(
-                admit_hardware(status),
+                admit_hardware(status, false),
+                Err(ModelProbeError::HardwareNotReady(status))
+            );
+            assert_eq!(
+                admit_hardware(status, true),
                 Err(ModelProbeError::HardwareNotReady(status))
             );
         }
@@ -715,6 +843,11 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         assert_eq!(report.profile, LocalProfile::Lite);
         assert_eq!(report.context_tokens, DIAGNOSTIC_CONTEXT);
         assert!(report.server_peak_rss_bytes.is_some_and(|bytes| bytes > 0));
+        assert!(
+            report
+                .process_group_peak_rss_bytes
+                .is_some_and(|bytes| bytes > 0)
+        );
         fixture.assert_reaped();
         let args: Vec<String> = serde_json::from_slice(&fs::read(&fixture.args).unwrap()).unwrap();
         assert!(
@@ -731,18 +864,39 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
     }
 
     #[test]
+    fn memory_ceiling_breach_aborts_probe_and_reaps_child() {
+        let fixture = Fixture::new("healthy");
+        let result =
+            fixture.run_with_ceiling(Some(1), &CancellationToken::new(), Duration::from_secs(3));
+        match result {
+            Err(ModelProbeError::MemoryLimitExceeded {
+                limit_bytes,
+                observed_bytes,
+            }) => {
+                assert_eq!(limit_bytes, 1);
+                assert!(observed_bytes > 1);
+            }
+            other => panic!("expected MemoryLimitExceeded, got {other:?}"),
+        }
+        fixture.assert_reaped();
+    }
+
+    #[test]
     fn post_version_revalidation_blocks_model_spawn() {
         let fixture = Fixture::new("healthy");
         let revalidated = AtomicBool::new(false);
         let result = run_model_probe(
-            &fixture.server,
-            fixture.server.parent().unwrap(),
-            &fixture.model,
-            LocalProfile::Lite,
+            ProbeTarget {
+                executable: &fixture.server,
+                install_directory: fixture.server.parent().unwrap(),
+                model_path: &fixture.model,
+                profile: LocalProfile::Lite,
+            },
             || {
                 revalidated.store(true, Ordering::Release);
                 Err(ModelProbeError::ModelInvalid)
             },
+            None,
             &CancellationToken::new(),
             Duration::from_secs(3),
         );
@@ -834,10 +988,12 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         );
         assert_eq!(installed.state(), RuntimeInstallState::Verified);
         let report = run_model_probe(
-            installed.server_path(),
-            installed.path(),
-            &fixture.cache_path(&paths),
-            LocalProfile::Lite,
+            ProbeTarget {
+                executable: installed.server_path(),
+                install_directory: installed.path(),
+                model_path: &fixture.cache_path(&paths),
+                profile: LocalProfile::Lite,
+            },
             || {
                 verify_model(&paths, fixture, &CancellationToken::new())?;
                 if inspect_installed_runtime_cancellable(
@@ -853,6 +1009,7 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
                 }
                 Ok(())
             },
+            None,
             &CancellationToken::new(),
             LOAD_TIMEOUT,
         )
@@ -861,9 +1018,15 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         assert!(report.startup_ms < LOAD_TIMEOUT.as_millis());
         assert!(report.generation_ms < GENERATION_TIMEOUT.as_millis());
         assert!(report.server_peak_rss_bytes.is_some_and(|bytes| bytes > 0));
+        assert!(
+            report
+                .process_group_peak_rss_bytes
+                .is_some_and(|bytes| bytes > 0)
+        );
         eprintln!(
-            "diagnostic server-only peak RSS: {} bytes",
-            report.server_peak_rss_bytes.unwrap()
+            "diagnostic server-only peak RSS: {} bytes, process-group peak RSS: {} bytes",
+            report.server_peak_rss_bytes.unwrap(),
+            report.process_group_peak_rss_bytes.unwrap(),
         );
     }
 }

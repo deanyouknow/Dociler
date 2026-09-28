@@ -44,7 +44,9 @@ impl Workspace {
             .stderr(Stdio::piped())
             .spawn()
             .expect("run dociler");
-        child.stdin.take().unwrap().write_all(input).unwrap();
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(input);
+        }
         child.wait_with_output().expect("wait for dociler")
     }
 }

@@ -1028,11 +1028,21 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             match report.server_peak_rss_bytes {
                 Some(bytes) => writeln!(
                     output,
-                    "Diagnostic server-only peak RSS: {bytes} bytes (Linux VmHWM; not the full Dociler process-group or release memory gate)."
+                    "Diagnostic server-only peak RSS: {bytes} bytes (Linux VmHWM)."
                 )?,
                 None => writeln!(
                     output,
                     "Diagnostic server-only peak RSS: unavailable on this platform; no memory qualification was performed."
+                )?,
+            }
+            match report.process_group_peak_rss_bytes {
+                Some(bytes) => writeln!(
+                    output,
+                    "Diagnostic process-group peak RSS: {bytes} bytes (Dociler host + runtime sidecar concurrent peak)."
+                )?,
+                None => writeln!(
+                    output,
+                    "Diagnostic process-group peak RSS: unavailable on this platform."
                 )?,
             }
         }
@@ -1449,6 +1459,9 @@ fn main() -> ExitCode {
                     }
                     ModelProbeError::TimedOut => {
                         "model load or generation timed out; its child was stopped."
+                    }
+                    ModelProbeError::MemoryLimitExceeded { .. } => {
+                        "process-group memory exceeded the ceiling; its child was stopped to protect the host."
                     }
                 },
                 CommandError::Signal => {

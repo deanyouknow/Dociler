@@ -254,12 +254,18 @@ and Ctrl+C/Ctrl+Break on Windows into the cooperative cancellation token used by
 their core services. Multi-gigabyte model asset and installed runtime inventory
 hashing loops poll this token on each 64 KiB buffer chunk, stopping long hash
 operations immediately upon cancellation without lingering or yielding false
-verified states. On Linux, the load probe samples `llama-server`'s kernel `VmHWM`
-high-water RSS while the child is alive and reports it separately. A missing
-`/proc` value yields “unavailable,” never zero. This is **server-only**
-diagnostic telemetry, not the process-group peak that includes Dociler, parser,
-indexing, descendants, and sustained generation. It neither enforces a memory
-ceiling nor admits Lite/Pro for release.
+verified states. On Linux, the load probe samples both `llama-server`'s kernel `VmHWM` high-water
+RSS and concurrent process-group RSS across Dociler, the server, and any sidecar
+descendant tasks (`/proc/<pid>/task/<pid>/children`), reporting both metrics
+honestly (`server_peak_rss_bytes` and `process_group_peak_rss_bytes`). Missing
+metrics report “unavailable” (`None`), never zero. An enforceable memory ceiling
+guard (`memory_ceiling_bytes`) can be passed to the probe: if combined RSS
+crosses the ceiling at any sampling tick, cooperative cancellation trips
+immediately and the sidecar is stopped and reaped. Hardware preflight fails
+closed: experimental 6–8 GB Lite tiers require explicit opt-in
+(`allow_experimental`), while insufficient or incomplete hardware configurations
+are always refused. These diagnostics alone do not admit Lite/Pro for release;
+they provide enforceable memory safety and telemetry during evaluation.
 
 Display download source and license before consent. Support list, verify, remove,
 repair, and update operations without deleting unrelated cached assets. Removal
