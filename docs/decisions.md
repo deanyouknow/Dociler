@@ -445,3 +445,38 @@ guessing or reporting zero for unavailable metrics on non-Linux platforms,
 silently admitting the experimental 6–8 GB Lite tier without explicit opt-in,
 allowing lingering background sidecars upon memory limit breaches, or trusting
 untested memory limits without active enforcement.
+
+## ADR-026: Explicit model cache removal, repair, and cancellable download lifecycle
+
+**Decision:** Provide explicit scriptable `model remove TARGET --confirm` and
+`model repair PROFILE --confirm` commands (where TARGET is `dociler-lite`,
+`dociler-pro`, `runtime`, or `all`). Without `--confirm`, both commands operate
+strictly in dry-run preview mode, reporting exact candidate paths, file sizes,
+and integrity states without performing any filesystem mutation. Model removal
+safely purges final GGUF files, active `.partial` streams, and advisory lock
+files, pruning empty versioned parent directories while verifying path safety,
+refusing symlinks, and never modifying unrelated cached profiles or shared
+runtimes. Model repair inspects both the model GGUF and the runtime installation:
+if files are corrupted (size/SHA-256 mismatch) or missing, it purges invalid
+files and re-downloads or re-installs them through the verified pipeline; if
+already verified, it reports healthy without re-downloading. Wire
+`CliSignalGuard` into `model download` and `model repair` so terminal interrupts
+(SIGINT/SIGTERM/Ctrl+C) cooperatively cancel active HTTP body streams and
+preserve `.partial` bytes for subsequent resumption.
+
+**Why:** Download errors, interrupted writes, filesystem bitrot, or accidental
+tampering can leave invalid files that permanently block subsequent downloads
+under Dociler's strict `ExistingInvalid` no-clobber policy. Without explicit
+removal and repair tools, users would be forced to manually locate and delete
+files inside internal cache directories, risking deletion of unrelated assets
+or breaking directory structures. A preview-first dry-run with explicit
+confirmation prevents accidental multi-gigabyte deletions while guaranteeing
+safe cleanup and restoration. Wiring signal cancellation into downloads ensures
+that user interruptions stop network traffic immediately, release locks, and
+keep partial files safely resumable.
+
+**Rejected:** Silently overwriting or auto-repairing corrupt cache files on
+standard download; deleting unrelated cached profiles or the shared runtime
+during single-model removal; following symlinks during cache pruning; leaving
+stale lock files after cancellation; or omitting dry-run previews before
+destructive operations.

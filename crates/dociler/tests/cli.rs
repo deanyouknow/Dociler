@@ -532,3 +532,45 @@ fn non_utf8_arguments_are_rejected_without_panicking() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
 }
+
+#[test]
+fn model_remove_requires_consent_and_dry_runs_without_writes() {
+    let workspace = Workspace::new();
+    let unconfirmed = workspace.run(&["model", "remove", "dociler-lite"]);
+    assert_eq!(unconfirmed.status.code(), Some(1));
+    let stdout = String::from_utf8(unconfirmed.stdout).unwrap();
+    let stderr = String::from_utf8(unconfirmed.stderr).unwrap();
+    assert!(stdout.contains("Previewing cache removal for dociler-lite"));
+    assert!(stderr.contains("explicit consent"));
+
+    // Set up a mock cached file in data directory
+    let data_dir = workspace.0.join("data");
+    let model_file = data_dir.join("models/manifest-v1/dociler-lite/Qwen_Qwen3.5-4B-Q4_K_M.gguf");
+    fs::create_dir_all(model_file.parent().unwrap()).unwrap();
+    fs::write(&model_file, b"model-bytes").unwrap();
+    assert!(model_file.exists());
+
+    // Without confirm, preview shows candidate but does not delete
+    let preview = workspace.run(&["model", "remove", "dociler-lite"]);
+    assert_eq!(preview.status.code(), Some(1));
+    assert!(model_file.exists());
+
+    // With confirm, file is safely removed
+    let confirmed = workspace.run(&["model", "remove", "dociler-lite", "--confirm"]);
+    assert_eq!(confirmed.status.code(), Some(0));
+    assert!(!model_file.exists());
+    let confirmed_stdout = String::from_utf8(confirmed.stdout).unwrap();
+    assert!(confirmed_stdout.contains("Removed 1 cached asset file(s) for dociler-lite"));
+}
+
+#[test]
+fn model_repair_requires_consent_and_dry_runs_without_writes() {
+    let workspace = Workspace::new();
+    let unconfirmed = workspace.run(&["model", "repair", "dociler-lite"]);
+    assert_eq!(unconfirmed.status.code(), Some(1));
+    let stdout = String::from_utf8(unconfirmed.stdout).unwrap();
+    let stderr = String::from_utf8(unconfirmed.stderr).unwrap();
+    assert!(stdout.contains("Inspecting assets for dociler-lite"));
+    assert!(stdout.contains("Repair required"));
+    assert!(stderr.contains("explicit consent"));
+}

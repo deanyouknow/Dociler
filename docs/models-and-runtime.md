@@ -267,9 +267,21 @@ closed: experimental 6–8 GB Lite tiers require explicit opt-in
 are always refused. These diagnostics alone do not admit Lite/Pro for release;
 they provide enforceable memory safety and telemetry during evaluation.
 
-Display download source and license before consent. Support list, verify, remove,
-repair, and update operations without deleting unrelated cached assets. Removal
-and repair remain pending.
+`dociler model remove TARGET --confirm` safely removes cached models (`dociler-lite`,
+`dociler-pro`), the `runtime` archive and extracted directory, or `all` cached
+assets, clearing associated `.partial` and `.lock` files and pruning empty parent
+directories without modifying unrelated profiles. Without `--confirm`, it operates
+as a dry-run preview reporting candidates and recoverable byte counts.
+
+`dociler model repair PROFILE --confirm` inspects the selected model profile and
+runtime installation. If assets are corrupted (size/hash mismatch) or missing, it
+safely removes the invalid files and re-downloads or re-installs them through the
+verified pipeline with SHA-256 validation. Without `--confirm`, it displays a
+diagnostic inspection of what requires repair.
+
+`model download` and `model repair` install a scoped CLI signal listener; terminal
+interrupts (SIGINT/SIGTERM/Ctrl+C) cancel active transfers immediately and
+preserve `.partial` files for subsequent resumption.
 
 ## Qualification gates
 

@@ -959,6 +959,30 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         stalled.assert_reaped();
     }
 
+    #[test]
+    fn loading_cancellation_reaps_the_child() {
+        let loading = Fixture::new("loading");
+        let cancellation = CancellationToken::new();
+        let signal = cancellation.clone();
+        let pid_file = loading.pid.clone();
+        let notifier = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !pid_file.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            thread::sleep(Duration::from_millis(50));
+            signal.cancel();
+        });
+        let start = Instant::now();
+        assert_eq!(
+            loading.run(&cancellation, Duration::from_secs(5)),
+            Err(ModelProbeError::Cancelled)
+        );
+        notifier.join().unwrap();
+        assert!(start.elapsed() < Duration::from_secs(4));
+        loading.assert_reaped();
+    }
+
     /// Opt-in protocol check against the real pinned binary and a small,
     /// independently licensed GGUF. This is not Lite hardware/quality admission.
     #[cfg(target_arch = "x86_64")]

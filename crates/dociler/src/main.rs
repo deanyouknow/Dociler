@@ -1,10 +1,12 @@
 use std::ffi::OsString;
+use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 
 use dociler_core::assets::{
     CacheState, LLAMA_CPP_BUILD, LLAMA_CPP_COMMIT, LLAMA_CPP_RELEASE, MANIFEST_ID, MODEL_ASSETS,
-    VerificationLevel, current_runtime_asset, inspect_cached_asset_cancellable,
+    ModelRemovalError, ModelRemoveTarget, VerificationLevel, current_runtime_asset,
+    inspect_cached_asset_cancellable, preview_cached_removal, remove_cached_assets,
 };
 use dociler_core::chat::CancellationToken;
 use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings, LocalProfile};
@@ -52,6 +54,10 @@ Commands:
                 Verify cached model/runtime sizes and SHA-256 (no writes)
   model download PROFILE --confirm [--restart]
                 Download the pinned runtime and model; resume partial files by default
+  model remove TARGET --confirm
+                Safely remove a cached model (dociler-lite, dociler-pro), runtime, or all
+  model repair PROFILE --confirm
+                Inspect, clean, and re-download/reinstall corrupt or missing assets
   model runtime-install --confirm
                 Safely extract and inventory the verified pinned runtime (never execute it)
   model runtime-probe --confirm
@@ -102,6 +108,14 @@ enum Command {
         profile: LocalProfile,
         confirmed: bool,
         restart_partial: bool,
+    },
+    ModelRemove {
+        target: ModelRemoveTarget,
+        confirmed: bool,
+    },
+    ModelRepair {
+        profile: LocalProfile,
+        confirmed: bool,
     },
     ModelRuntimeInstall {
         confirmed: bool,
@@ -205,6 +219,34 @@ fn parse(args: &[OsString]) -> Option<Command> {
                 profile: parse_local_profile(profile)?,
                 confirmed: true,
                 restart_partial: true,
+            })
+        }
+        [command, action, target] if command == "model" && action == "remove" => {
+            Some(Command::ModelRemove {
+                target: parse_model_remove_target(target)?,
+                confirmed: false,
+            })
+        }
+        [command, action, target, flag]
+            if command == "model" && action == "remove" && flag == "--confirm" =>
+        {
+            Some(Command::ModelRemove {
+                target: parse_model_remove_target(target)?,
+                confirmed: true,
+            })
+        }
+        [command, action, profile] if command == "model" && action == "repair" => {
+            Some(Command::ModelRepair {
+                profile: parse_local_profile(profile)?,
+                confirmed: false,
+            })
+        }
+        [command, action, profile, flag]
+            if command == "model" && action == "repair" && flag == "--confirm" =>
+        {
+            Some(Command::ModelRepair {
+                profile: parse_local_profile(profile)?,
+                confirmed: true,
             })
         }
         [command, action] if command == "model" && action == "runtime-install" => {
@@ -332,6 +374,16 @@ fn parse_local_profile(value: &OsString) -> Option<LocalProfile> {
     }
 }
 
+fn parse_model_remove_target(value: &OsString) -> Option<ModelRemoveTarget> {
+    match value.to_str()? {
+        "dociler-lite" => Some(ModelRemoveTarget::Profile(LocalProfile::Lite)),
+        "dociler-pro" => Some(ModelRemoveTarget::Profile(LocalProfile::Pro)),
+        "runtime" => Some(ModelRemoveTarget::Runtime),
+        "all" => Some(ModelRemoveTarget::All),
+        _ => None,
+    }
+}
+
 enum CommandError {
     Output(io::Error),
     Workspace,
@@ -342,6 +394,7 @@ enum CommandError {
     Conflict,
     AssetVerification,
     AssetDownload(DownloadError),
+    AssetRemoval(ModelRemovalError),
     RuntimeInstall(RuntimeInstallError),
     RuntimeProbe(RuntimeProbeError),
     ModelProbe(ModelProbeError),
@@ -632,6 +685,7 @@ fn download_asset(
     license: &str,
     artifact: dociler_core::assets::AssetSpec,
     restart_partial: bool,
+    cancellation: &CancellationToken,
 ) -> Result<(), CommandError> {
     writeln!(output, "Downloading {label}:")?;
     writeln!(output, "  license={license}")?;
@@ -647,7 +701,7 @@ fn download_asset(
         app_paths,
         artifact,
         DownloadOptions::confirmed(restart_partial),
-        &CancellationToken::new(),
+        cancellation,
         |DownloadProgress {
              downloaded_bytes,
              total_bytes,
@@ -868,6 +922,9 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 "no pinned llama.cpp runtime exists for this platform; use Remote mode",
             ))?;
             let model = dociler_core::assets::model_asset(profile);
+            let cancellation = CancellationToken::new();
+            let _signals = cli_signals::CliSignalGuard::install(cancellation.clone())
+                .map_err(|_| CommandError::Signal)?;
             print_asset_manifest_header(output)?;
             writeln!(
                 output,
@@ -880,6 +937,7 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 "MIT",
                 runtime.artifact(),
                 restart_partial,
+                &cancellation,
             )?;
             download_asset(
                 output,
@@ -888,10 +946,182 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 model.license(),
                 model.artifact(),
                 restart_partial,
+                &cancellation,
             )?;
             writeln!(
                 output,
                 "Assets are cached and verified only; archive extraction and local execution remain disabled."
+            )?;
+        }
+        Command::ModelRemove { target, confirmed } => {
+            let app_paths = paths()?;
+            let preview =
+                preview_cached_removal(&app_paths, target).map_err(CommandError::AssetRemoval)?;
+            if !confirmed {
+                writeln!(output, "Previewing cache removal for {}:", target.label())?;
+                if preview.removed_paths.is_empty() {
+                    writeln!(output, "  No cached files found; 0 bytes to free.")?;
+                } else {
+                    for path in &preview.removed_paths {
+                        writeln!(output, "  candidate={path:?}")?;
+                    }
+                    writeln!(output, "  potential-freed-bytes={}", preview.bytes_freed)?;
+                }
+                writeln!(
+                    output,
+                    "To execute removal, run: dociler model remove {} --confirm",
+                    target.label()
+                )?;
+                return Err(CommandError::Usage(
+                    "model removal requires explicit consent: dociler model remove TARGET --confirm",
+                ));
+            }
+            let outcome = remove_cached_assets(&app_paths, target, true)
+                .map_err(CommandError::AssetRemoval)?;
+            writeln!(
+                output,
+                "Removed {} cached asset file(s) for {}, freeing {} bytes.",
+                outcome.removed_paths.len(),
+                outcome.target.label(),
+                outcome.bytes_freed
+            )?;
+        }
+        Command::ModelRepair { profile, confirmed } => {
+            let app_paths = paths()?;
+            let runtime = current_runtime_asset().ok_or(CommandError::Usage(
+                "no pinned llama.cpp runtime exists for this platform; use Remote mode",
+            ))?;
+            let model = dociler_core::assets::model_asset(profile);
+
+            let cancellation = CancellationToken::new();
+            let _signals = cli_signals::CliSignalGuard::install(cancellation.clone())
+                .map_err(|_| CommandError::Signal)?;
+
+            let model_state = inspect_cached_asset_cancellable(
+                &app_paths,
+                model.artifact(),
+                VerificationLevel::Sha256,
+                Some(&cancellation),
+            );
+            let runtime_archive_state = inspect_cached_asset_cancellable(
+                &app_paths,
+                runtime.artifact(),
+                VerificationLevel::Sha256,
+                Some(&cancellation),
+            );
+            let installed_runtime_state = inspect_installed_runtime_cancellable(
+                &app_paths,
+                *runtime,
+                VerificationLevel::Sha256,
+                Some(&cancellation),
+            );
+
+            let model_needs_repair = !model_state.state().is_verified();
+            let runtime_archive_needs_repair = !runtime_archive_state.state().is_verified();
+            let runtime_install_needs_repair =
+                installed_runtime_state.state() != RuntimeInstallState::Verified;
+            let needs_repair =
+                model_needs_repair || runtime_archive_needs_repair || runtime_install_needs_repair;
+
+            if !confirmed {
+                writeln!(output, "Inspecting assets for {}:", profile.alias())?;
+                writeln!(output, "  model-status={:?}", model_state.state())?;
+                writeln!(
+                    output,
+                    "  runtime-archive-status={:?}",
+                    runtime_archive_state.state()
+                )?;
+                writeln!(
+                    output,
+                    "  runtime-install-status={:?}",
+                    installed_runtime_state.state()
+                )?;
+                if !needs_repair {
+                    writeln!(
+                        output,
+                        "All assets for {} are intact and verified; no repair is needed.",
+                        profile.alias()
+                    )?;
+                    return Ok(());
+                }
+                writeln!(
+                    output,
+                    "Repair required: invalid or missing files will be cleaned and re-downloaded/re-installed."
+                )?;
+                writeln!(
+                    output,
+                    "To execute repair, run: dociler model repair {} --confirm",
+                    profile.alias()
+                )?;
+                return Err(CommandError::Usage(
+                    "model repair requires explicit consent: dociler model repair PROFILE --confirm",
+                ));
+            }
+
+            if !needs_repair {
+                writeln!(
+                    output,
+                    "All assets for {} are already intact and verified; no repair was needed.",
+                    profile.alias()
+                )?;
+                return Ok(());
+            }
+
+            print_asset_manifest_header(output)?;
+            writeln!(output, "Repairing assets for {}:", profile.alias())?;
+
+            if runtime_archive_needs_repair {
+                writeln!(output, "Runtime archive requires repair; re-downloading:")?;
+                let _ = remove_cached_assets(&app_paths, ModelRemoveTarget::Runtime, true);
+                download_asset(
+                    output,
+                    &app_paths,
+                    "llama.cpp runtime archive",
+                    "MIT",
+                    runtime.artifact(),
+                    true,
+                    &cancellation,
+                )?;
+            }
+
+            if runtime_install_needs_repair {
+                writeln!(output, "Installed runtime requires repair; re-installing:")?;
+                let installed_dir = app_paths.runtimes_dir().join(LLAMA_CPP_RELEASE);
+                if installed_dir.exists() {
+                    let _ = fs::remove_dir_all(&installed_dir);
+                }
+                let _ = install_cached_runtime(
+                    &app_paths,
+                    *runtime,
+                    RuntimeInstallOptions::confirmed(),
+                    &cancellation,
+                )
+                .map_err(CommandError::RuntimeInstall)?;
+                writeln!(output, "Runtime reinstalled and verified.")?;
+            }
+
+            if model_needs_repair {
+                writeln!(
+                    output,
+                    "Model {} requires repair; re-downloading:",
+                    profile.alias()
+                )?;
+                let _ = remove_cached_assets(&app_paths, ModelRemoveTarget::Profile(profile), true);
+                download_asset(
+                    output,
+                    &app_paths,
+                    profile.alias(),
+                    model.license(),
+                    model.artifact(),
+                    true,
+                    &cancellation,
+                )?;
+            }
+
+            writeln!(
+                output,
+                "Repair completed successfully for {}.",
+                profile.alias()
             )?;
         }
         Command::ModelRuntimeInstall { confirmed } => {
@@ -1347,6 +1577,17 @@ fn main() -> ExitCode {
                     }
                     DownloadError::Io(_) => {
                         "asset cache I/O failed; check cache ownership, permissions, and free space."
+                    }
+                },
+                CommandError::AssetRemoval(error) => match error {
+                    ModelRemovalError::ConsentRequired => {
+                        "model removal requires explicit --confirm consent; nothing was changed."
+                    }
+                    ModelRemovalError::UnsafePath => {
+                        "asset cache path is unsafe; symlinks and non-directory ancestors are rejected."
+                    }
+                    ModelRemovalError::Io(_) => {
+                        "asset cache removal I/O failed; check cache ownership, permissions, and free space."
                     }
                 },
                 CommandError::RuntimeInstall(error) => match error {

@@ -169,13 +169,14 @@ Only `/help`, `/status`, `/connect [NAME|add|refresh|check NAME|edit NAME|remove
 NAME|key NAME]`, confirmed `/clear`, and `/exit` are active in the current
 terminal surface. `dociler model status`, `model list`, and `model verify
 [PROFILE]` are available outside the TUI, as is the explicitly confirmed
-`model download PROFILE --confirm [--restart]`, `model runtime-install --confirm`,
+`model download PROFILE --confirm [--restart]`, `model remove TARGET --confirm`,
+`model repair PROFILE --confirm`, `model runtime-install --confirm`,
 `model runtime-probe --confirm`, and diagnostic-only
 `model load-probe PROFILE --confirm`; the interactive `/model` workflow and the
-remaining rows are the approved target contract. The core
-download transport is cooperatively cancellable, while signal/keyboard wiring
-for this scriptable command remains a later CLI/TUI integration unit; abrupt
-termination safely leaves the `.partial` file resumable.
+remaining rows are the approved target contract. Both `model download` and
+`model repair` are wired to scoped signal listeners (SIGINT/SIGTERM/Ctrl+C),
+cooperatively stopping active HTTP body streams and preserving partial files
+for subsequent resumption.
 
 ## Write experience
 

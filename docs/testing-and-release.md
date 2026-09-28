@@ -267,3 +267,17 @@ checks establish measurable memory telemetry and active ceiling enforcement
 during diagnostic probing; full-context 8K/16K extended workloads, multi-GB
 pinned Lite/Pro qualification, and native non-Linux memory telemetry remain
 outstanding release gates.
+
+The cache lifecycle and cancellation safety unit adds model removal, model
+repair, download signal cancellation, and loading-phase probe cancellation.
+Deterministic tests verify that model load cancellation during server startup
+aborts cleanly and reaps the sidecar (`loading_cancellation_reaps_the_child`).
+Core asset removal tests verify that cache removal requires explicit consent
+(`remove_cached_model_requires_consent`), deletes target final, partial, and
+lock files while preserving unrelated profiles
+(`remove_cached_model_cleans_files_and_preserves_unrelated`), removes runtime
+archives and installed directory trees
+(`remove_cached_runtime_removes_archive_and_installed_tree`), and rejects
+symlinks fail-closed (`remove_cached_assets_rejects_symlinks`). CLI integration
+tests verify that `model remove` and `model repair` dry-run safely without writes
+when unconfirmed and execute correctly when confirmed.

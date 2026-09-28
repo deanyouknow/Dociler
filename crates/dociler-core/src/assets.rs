@@ -493,6 +493,223 @@ fn verify_file(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelRemoveTarget {
+    Profile(LocalProfile),
+    Runtime,
+    All,
+}
+
+impl ModelRemoveTarget {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Profile(LocalProfile::Lite) => "dociler-lite",
+            Self::Profile(LocalProfile::Pro) => "dociler-pro",
+            Self::Runtime => "runtime",
+            Self::All => "all",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelRemovalOutcome {
+    pub target: ModelRemoveTarget,
+    pub removed_paths: Vec<PathBuf>,
+    pub bytes_freed: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelRemovalError {
+    ConsentRequired,
+    UnsafePath,
+    Io(io::ErrorKind),
+}
+
+impl std::fmt::Display for ModelRemovalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ConsentRequired => write!(f, "removal consent is required"),
+            Self::UnsafePath => write!(f, "unsafe path or symlink encountered in cache"),
+            Self::Io(kind) => write!(f, "I/O error during cache removal: {kind:?}"),
+        }
+    }
+}
+
+impl std::error::Error for ModelRemovalError {}
+
+/// Collects paths and measures bytes that would be deleted for the specified target,
+/// ensuring all paths are strictly internal to the cache root and contain no symlinks.
+pub fn preview_cached_removal(
+    paths: &AppPaths,
+    target: ModelRemoveTarget,
+) -> Result<ModelRemovalOutcome, ModelRemovalError> {
+    let mut removed_paths = Vec::new();
+    let mut bytes_freed = 0_u64;
+
+    let targets_to_process: Vec<ModelRemoveTarget> = match target {
+        ModelRemoveTarget::All => vec![
+            ModelRemoveTarget::Profile(LocalProfile::Lite),
+            ModelRemoveTarget::Profile(LocalProfile::Pro),
+            ModelRemoveTarget::Runtime,
+        ],
+        single => vec![single],
+    };
+
+    for t in targets_to_process {
+        match t {
+            ModelRemoveTarget::Profile(profile) => {
+                let model = model_asset(profile);
+                collect_asset_cache_files(
+                    paths,
+                    model.artifact(),
+                    &mut removed_paths,
+                    &mut bytes_freed,
+                )?;
+            }
+            ModelRemoveTarget::Runtime => {
+                if let Some(runtime) = current_runtime_asset() {
+                    collect_asset_cache_files(
+                        paths,
+                        runtime.artifact(),
+                        &mut removed_paths,
+                        &mut bytes_freed,
+                    )?;
+                }
+                let installed_dir = paths.runtimes_dir().join(LLAMA_CPP_RELEASE);
+                if installed_dir.exists() {
+                    let root = paths.runtimes_dir();
+                    validate_path_safety(&root, &installed_dir)?;
+                    let metadata = fs::symlink_metadata(&installed_dir)
+                        .map_err(|e| ModelRemovalError::Io(e.kind()))?;
+                    if metadata.file_type().is_symlink() {
+                        return Err(ModelRemovalError::UnsafePath);
+                    }
+                    bytes_freed = bytes_freed.saturating_add(directory_bytes(&installed_dir)?);
+                    removed_paths.push(installed_dir);
+                }
+            }
+            ModelRemoveTarget::All => unreachable!(),
+        }
+    }
+
+    Ok(ModelRemovalOutcome {
+        target,
+        removed_paths,
+        bytes_freed,
+    })
+}
+
+/// Safely removes cached model or runtime assets after explicit consent.
+pub fn remove_cached_assets(
+    paths: &AppPaths,
+    target: ModelRemoveTarget,
+    confirmed: bool,
+) -> Result<ModelRemovalOutcome, ModelRemovalError> {
+    if !confirmed {
+        return Err(ModelRemovalError::ConsentRequired);
+    }
+    let preview = preview_cached_removal(paths, target)?;
+    for path in &preview.removed_paths {
+        if path.is_dir() {
+            fs::remove_dir_all(path).map_err(|e| ModelRemovalError::Io(e.kind()))?;
+        } else if path.exists() {
+            fs::remove_file(path).map_err(|e| ModelRemovalError::Io(e.kind()))?;
+        }
+    }
+    for path in &preview.removed_paths {
+        if let Some(parent) = path.parent() {
+            if parent.exists() && is_dir_empty(parent) {
+                let _ = fs::remove_dir(parent);
+            }
+        }
+    }
+    Ok(preview)
+}
+
+fn collect_asset_cache_files(
+    paths: &AppPaths,
+    asset: AssetSpec,
+    paths_out: &mut Vec<PathBuf>,
+    bytes_out: &mut u64,
+) -> Result<(), ModelRemovalError> {
+    let final_path = asset.cache_path(paths);
+    let root = cache_root(paths, asset.kind);
+    validate_path_safety(&root, &final_path)?;
+
+    let parent = final_path.parent().ok_or(ModelRemovalError::UnsafePath)?;
+    let file_name = final_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or(ModelRemovalError::UnsafePath)?;
+    let partial_path = parent.join(format!("{file_name}.partial"));
+    let lock_path = parent.join(".dociler-download.lock");
+
+    for candidate in [final_path, partial_path, lock_path] {
+        if candidate.exists() {
+            validate_path_safety(&root, &candidate)?;
+            let metadata =
+                fs::symlink_metadata(&candidate).map_err(|e| ModelRemovalError::Io(e.kind()))?;
+            if metadata.file_type().is_symlink() {
+                return Err(ModelRemovalError::UnsafePath);
+            }
+            if metadata.is_file() {
+                *bytes_out = bytes_out.saturating_add(metadata.len());
+                paths_out.push(candidate);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_path_safety(root: &Path, path: &Path) -> Result<(), ModelRemovalError> {
+    if !path.starts_with(root) {
+        return Err(ModelRemovalError::UnsafePath);
+    }
+    let Some(relative) = path.strip_prefix(root).ok() else {
+        return Err(ModelRemovalError::UnsafePath);
+    };
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(ModelRemovalError::UnsafePath);
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => break,
+            Err(e) => return Err(ModelRemovalError::Io(e.kind())),
+        }
+    }
+    Ok(())
+}
+
+fn directory_bytes(dir: &Path) -> Result<u64, ModelRemovalError> {
+    let mut total = 0_u64;
+    let entries = fs::read_dir(dir).map_err(|e| ModelRemovalError::Io(e.kind()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| ModelRemovalError::Io(e.kind()))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|e| ModelRemovalError::Io(e.kind()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(ModelRemovalError::UnsafePath);
+        }
+        if metadata.is_dir() {
+            total = total.saturating_add(directory_bytes(&entry.path())?);
+        } else {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    Ok(total)
+}
+
+fn is_dir_empty(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,5 +858,105 @@ mod tests {
         assert_eq!(inspection.state(), &CacheState::Cancelled);
         assert!(inspection.state().is_cancelled());
         assert!(!inspection.state().is_verified());
+    }
+
+    #[test]
+    fn remove_cached_model_requires_consent() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        assert_eq!(
+            remove_cached_assets(
+                &paths,
+                ModelRemoveTarget::Profile(LocalProfile::Lite),
+                false
+            ),
+            Err(ModelRemovalError::ConsentRequired)
+        );
+    }
+
+    #[test]
+    fn remove_cached_model_cleans_files_and_preserves_unrelated() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+
+        let lite = model_asset(LocalProfile::Lite).artifact();
+        let lite_path = lite.cache_path(&paths);
+        let lite_parent = lite_path.parent().unwrap();
+        fs::create_dir_all(lite_parent).unwrap();
+        fs::write(&lite_path, b"lite-final").unwrap();
+        let lite_partial = lite_parent.join(format!("{}.partial", lite.file_name()));
+        fs::write(&lite_partial, b"lite-partial").unwrap();
+        let lite_lock = lite_parent.join(".dociler-download.lock");
+        fs::write(&lite_lock, b"lock").unwrap();
+
+        let pro = model_asset(LocalProfile::Pro).artifact();
+        let pro_path = pro.cache_path(&paths);
+        let pro_parent = pro_path.parent().unwrap();
+        fs::create_dir_all(pro_parent).unwrap();
+        fs::write(&pro_path, b"pro-final").unwrap();
+
+        let preview =
+            preview_cached_removal(&paths, ModelRemoveTarget::Profile(LocalProfile::Lite)).unwrap();
+        assert_eq!(preview.bytes_freed, 10 + 12 + 4);
+        assert_eq!(preview.removed_paths.len(), 3);
+
+        let outcome =
+            remove_cached_assets(&paths, ModelRemoveTarget::Profile(LocalProfile::Lite), true)
+                .unwrap();
+        assert_eq!(outcome.bytes_freed, 10 + 12 + 4);
+        assert!(!lite_path.exists());
+        assert!(!lite_partial.exists());
+        assert!(!lite_lock.exists());
+
+        // Unrelated profile is preserved intact
+        assert!(pro_path.exists());
+        assert_eq!(fs::read(&pro_path).unwrap(), b"pro-final");
+    }
+
+    #[test]
+    fn remove_cached_runtime_removes_archive_and_installed_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+
+        if let Some(runtime) = current_runtime_asset() {
+            let archive_path = runtime.artifact().cache_path(&paths);
+            fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
+            fs::write(&archive_path, b"archive-data").unwrap();
+
+            let installed_dir = paths.runtimes_dir().join(LLAMA_CPP_RELEASE);
+            fs::create_dir_all(&installed_dir).unwrap();
+            fs::write(installed_dir.join("llama-server"), b"server-binary").unwrap();
+
+            let outcome = remove_cached_assets(&paths, ModelRemoveTarget::Runtime, true).unwrap();
+            assert!(outcome.bytes_freed >= 12 + 13);
+            assert!(!archive_path.exists());
+            assert!(!installed_dir.exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_cached_assets_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let lite = model_asset(LocalProfile::Lite).artifact();
+        let lite_path = lite.cache_path(&paths);
+        let lite_parent = lite_path.parent().unwrap();
+        fs::create_dir_all(lite_parent).unwrap();
+
+        let outside = directory.path().join("outside");
+        fs::write(&outside, b"outside-target").unwrap();
+        symlink(&outside, &lite_path).unwrap();
+
+        assert_eq!(
+            preview_cached_removal(&paths, ModelRemoveTarget::Profile(LocalProfile::Lite)),
+            Err(ModelRemovalError::UnsafePath)
+        );
+        assert_eq!(
+            remove_cached_assets(&paths, ModelRemoveTarget::Profile(LocalProfile::Lite), true),
+            Err(ModelRemovalError::UnsafePath)
+        );
     }
 }

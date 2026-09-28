@@ -233,10 +233,19 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
   fail-closed evaluation: experimental 6–8 GB Lite tiers require explicit
   opt-in, while incomplete/insufficient configurations are refused. Added
   deterministic core and CLI tests, docs, and ADR-025.
+- Added safe model cache removal (`model remove`) and automated repair (`model repair`),
+  download signal cancellation wiring, and loading-phase probe cancellation tests.
+  `model remove` preview and execution enforce path-containment inside cache roots,
+  reject symlinks, and safely prune directories without affecting unrelated assets.
+  `model repair` dry-runs diagnostic status without consent, purges corrupted/tampered
+  files, and triggers clean re-download and reinstallation when confirmed. Scoped
+  signal listeners (`CliSignalGuard`) abort downloads cooperatively while preserving
+  partial files for later resume. Added 7 unit and integration tests across core and
+  CLI (Linux suite: 107 passed, 1 ignored), updated docs, and added ADR-026.
 
 ## Work in progress
 
-None; M4 process-group peak memory accounting and ceiling enforcement unit complete. Clean tree ready for commit.
+None; clean tree ready for commit.
 
 ## Next recommended task
 
@@ -344,8 +353,27 @@ repository or shell startup files. Use the normal rustup setup described in
 - ADR-025: process-group peak RSS sampling on Linux (Dociler host + sidecar
   server + descendant worker tasks) with configurable memory ceiling abort
   guard; fail-closed hardware admission for experimental Lite and incomplete tiers.
+- ADR-026: explicit model cache removal (`model remove`) and repair (`model repair`)
+  require confirmation (`--confirm`), enforce path containment inside designated
+  cache directories, reject symlinks fail-closed, and safely prune directories
+  without affecting unrelated assets; downloads wire scoped signals for cooperative
+  abort while preserving partial downloads for resumption; model loading probe
+  verifies cooperative abort and child reaping.
 
 ## Verification
+
+### M4 model cache removal, repair, and cancellable download lifecycle — 2026-09-28
+
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`.
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`.
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (107 tests passed, 1 ignored):
+  - `dociler` integration: 19 passed.
+  - `dociler-core` unit tests: 72 passed, 1 ignored (opt-in real SmolLM2 test).
+  - `foundation`: 11 passed.
+  - `remote`: 5 passed.
+- **passed:** `python3 scripts/check_docs.py` (17 Markdown files, 67 relative links, README coverage).
+- **passed:** `git diff --check` (no whitespace or newline errors).
+- **not run:** opt-in real GGUF SmolLM2 test, full-context 8K/16K workloads, native non-Linux platforms.
 
 ### M4 process-group memory accounting and ceiling enforcement — 2026-09-28
 
@@ -890,3 +918,4 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-26T19:01:56Z | Codex `/root` | Complete agent-transition export | Added resumption guide and conversation context; linked README and checkpoint; preserved M4 scope and all historical activity; resolves 18:59 entry | HANDOFF.md, README.md, CHECKPOINT.md | passed: documentation checker, diff check, manual scope/source-map review; not run: application tests (documentation only), commit/push | COMPLETE; M4 RELEASE ADMISSION PENDING | New agent reads handoff and required documents, inspects Git status, then resumes the canonical M4 task |
 | 2026-09-28T00:45:40Z | Antigravity | Cancellable model and runtime hash loops | Add cooperative cancellation to asset verification and installed runtime inventory hashing across core and CLI probe paths; chunk-level cancellation checks, tests, docs, and ADR-024 | crates/dociler-core/src/assets.rs, crates/dociler-core/src/downloads.rs, crates/dociler-core/src/runtime_install.rs, crates/dociler-core/src/runtime_probe.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, docs/decisions.md, docs/models-and-runtime.md, docs/testing-and-release.md, CHECKPOINT.md | passed: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --all-targets --locked` (99 tests passed), `python3 scripts/check_docs.py`, `git diff --check`; not run: real GGUF opt-in test, non-Linux native platforms, full-context quality gates | COMPLETE; M4 CANCELLABLE HASHING ACTIVE | Design and implement full process-group peak memory accounting and enforceable constrained-host admission policy |
 | 2026-09-28T01:08:00Z | Antigravity | Process-group peak memory accounting and enforceable admission/abort policy | Implement combined host and child process-group peak RSS sampling on Linux, enforceable memory ceiling abort guard during model probing, deterministic tests, docs, and ADR-025 | crates/dociler-core/src/probe_memory.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, crates/dociler/tests/cli.rs, docs/decisions.md, docs/models-and-runtime.md, docs/testing-and-release.md, CHECKPOINT.md | passed: `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (100 tests passed, 1 ignored), `python3 scripts/check_docs.py`, `git diff --check`; not run: real GGUF opt-in test, non-Linux native platforms, full-context quality gates | COMPLETE; M4 PROCESS-GROUP MEMORY GUARD ACTIVE | Attempt real Lite/Pro diagnostics with memory limits and verify signal cancellation during long-running pinned loads |
+| 2026-09-28T01:40:00Z | Antigravity | Model cache removal, repair, download signal cancellation, and loading probe cancellation | Add safe model removal and repair commands in core and CLI, download signal cancellation wiring, and loading-phase probe cancellation test | crates/dociler-core/src/assets.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, crates/dociler/tests/cli.rs, docs/decisions.md, docs/models-and-runtime.md, docs/cli-ux.md, docs/testing-and-release.md, CHECKPOINT.md | passed: `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (107 tests passed, 1 ignored), `python3 scripts/check_docs.py`, `git diff --check`; not run: real GGUF opt-in test, non-Linux native platforms, full-context quality gates | COMPLETE; M4 CACHE LIFECYCLE & CANCELLATION ACTIVE | Verify signal cancellation during an actual long-running pinned Lite/Pro load; attempt real Lite/Pro diagnostics with memory limits |
