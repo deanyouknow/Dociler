@@ -526,6 +526,26 @@ fn print_hardware(output: &mut impl Write, hardware: &HardwareInventory) -> io::
             hardware.cpu_features().join(", ")
         }
     )?;
+    if let Some(runtime) = current_runtime_asset() {
+        let cpu_check = hardware.evaluate_cpu_instructions(*runtime);
+        if cpu_check.supported {
+            writeln!(
+                output,
+                "Runtime CPU instructions: satisfied (required: {})",
+                if runtime.required_cpu_features().is_empty() {
+                    "none".to_owned()
+                } else {
+                    runtime.required_cpu_features().join(", ")
+                }
+            )?;
+        } else {
+            writeln!(
+                output,
+                "Runtime CPU instructions: missing required: {}",
+                cpu_check.missing_required.join(", ")
+            )?;
+        }
+    }
     writeln!(
         output,
         "Asset storage: {} free{}",
@@ -647,6 +667,20 @@ fn print_runtime_cache(
     writeln!(output, "  source={}", runtime.artifact().source_url())?;
     writeln!(output, "  sha256={}", runtime.artifact().sha256())?;
     writeln!(output, "  file={:?}", inspection.path())?;
+    writeln!(
+        output,
+        "  required-cpu={}",
+        if runtime.required_cpu_features().is_empty() {
+            "none".to_owned()
+        } else {
+            runtime.required_cpu_features().join(", ")
+        }
+    )?;
+    writeln!(
+        output,
+        "  expected-libraries={}",
+        runtime.expected_shared_libraries().join(", ")
+    )?;
     let installed = inspect_installed_runtime_cancellable(app_paths, *runtime, level, cancellation);
     let installed_state = installed.state();
     writeln!(
@@ -1638,6 +1672,9 @@ fn main() -> ExitCode {
                     RuntimeProbeError::InstallInvalid => {
                         "the installed runtime failed full inventory verification; nothing was executed."
                     }
+                    RuntimeProbeError::UnsupportedCpuInstructions(_) => {
+                        "the host CPU lacks required instructions for this runtime; run 'dociler model status' for details."
+                    }
                     RuntimeProbeError::Cancelled => {
                         "runtime probe was cancelled and its child stopped."
                     }
@@ -1685,6 +1722,9 @@ fn main() -> ExitCode {
                     }
                     ModelProbeError::RuntimeInvalid => {
                         "the installed runtime failed full inventory verification; nothing was executed."
+                    }
+                    ModelProbeError::UnsupportedCpuInstructions(_) => {
+                        "the host CPU lacks required instructions for this runtime; run 'dociler model status' for details."
                     }
                     ModelProbeError::HardwareNotReady(_) => {
                         "live hardware preflight did not admit this model; run 'dociler model status' and consider Remote mode. Experimental Lite is not enabled by this diagnostic."

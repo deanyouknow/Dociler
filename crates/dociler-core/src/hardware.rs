@@ -5,6 +5,7 @@ use std::thread;
 
 use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System};
 
+use crate::assets::RuntimeAsset;
 use crate::config::LocalProfile;
 
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -132,6 +133,38 @@ impl HardwareInventory {
     pub fn accelerator_candidates(&self) -> &[AcceleratorCandidate] {
         &self.accelerator_candidates
     }
+
+    pub fn evaluate_cpu_instructions(&self, runtime: RuntimeAsset) -> CpuInstructionPreflight {
+        let detected = self.cpu_features();
+        let mut missing_required = Vec::new();
+        for &required in runtime.required_cpu_features() {
+            if !detected.iter().any(|&f| f.eq_ignore_ascii_case(required)) {
+                missing_required.push(required);
+            }
+        }
+        let mut missing_recommended = Vec::new();
+        for &recommended in runtime.recommended_cpu_features() {
+            if !detected
+                .iter()
+                .any(|&f| f.eq_ignore_ascii_case(recommended))
+            {
+                missing_recommended.push(recommended);
+            }
+        }
+        let supported = missing_required.is_empty();
+        CpuInstructionPreflight {
+            supported,
+            missing_required,
+            missing_recommended,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CpuInstructionPreflight {
+    pub supported: bool,
+    pub missing_required: Vec<&'static str>,
+    pub missing_recommended: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -434,5 +467,42 @@ mod tests {
             assert!(inventory.total_memory_bytes().is_some());
             assert!(inventory.available_memory_bytes().is_some());
         }
+    }
+
+    #[test]
+    fn cpu_instruction_preflight_evaluates_requirements() {
+        let mut inventory = hardware(Some(16 * GIB), Some(12 * GIB), Some(20 * GIB));
+        inventory.cpu_features = vec!["avx", "avx2", "fma"];
+
+        let asset = crate::assets::AssetSpec::test_fixture(
+            crate::assets::AssetKind::RuntimeArchive,
+            "test-cache",
+            "test.tar.gz",
+            100,
+            "00",
+        );
+        let runtime_supported = crate::assets::RuntimeAsset::test_fixture_with_features(
+            "linux",
+            "x86_64",
+            asset,
+            &["avx", "avx2"],
+            &[],
+            (1, 10),
+        );
+        let preflight = inventory.evaluate_cpu_instructions(runtime_supported);
+        assert!(preflight.supported);
+        assert!(preflight.missing_required.is_empty());
+
+        let runtime_missing = crate::assets::RuntimeAsset::test_fixture_with_features(
+            "linux",
+            "x86_64",
+            asset,
+            &["avx", "avx512f"],
+            &[],
+            (1, 10),
+        );
+        let preflight_missing = inventory.evaluate_cpu_instructions(runtime_missing);
+        assert!(!preflight_missing.supported);
+        assert_eq!(preflight_missing.missing_required, vec!["avx512f"]);
     }
 }

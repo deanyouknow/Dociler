@@ -35,7 +35,7 @@ const GENERATION_TIMEOUT: Duration = Duration::from_secs(45);
 const GENERATION_RESPONSE_LIMIT: usize = 16 * 1024;
 const DIAGNOSTIC_CONTEXT: u32 = 1_024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelProbeError {
     ConsentRequired,
     Cancelled,
@@ -43,6 +43,7 @@ pub enum ModelProbeError {
     ModelInvalid,
     RuntimeMissing,
     RuntimeInvalid,
+    UnsupportedCpuInstructions(Vec<&'static str>),
     HardwareNotReady(PreflightStatus),
     Runtime(RuntimeProbeError),
     ModelIdentity,
@@ -63,6 +64,13 @@ impl fmt::Display for ModelProbeError {
             Self::ModelInvalid => "the pinned model failed full verification",
             Self::RuntimeMissing => "the pinned runtime is not installed",
             Self::RuntimeInvalid => "the installed runtime failed full inventory verification",
+            Self::UnsupportedCpuInstructions(missing) => {
+                return write!(
+                    formatter,
+                    "the host CPU lacks required instructions for this runtime: {}",
+                    missing.join(", ")
+                );
+            }
             Self::HardwareNotReady(_) => "live hardware preflight did not admit this model",
             Self::Runtime(_) => "the pinned runtime failed its model probe",
             Self::ModelIdentity => "the runtime reported an unexpected model or build",
@@ -159,6 +167,13 @@ pub fn probe_cached_model_with_options(
     if cancellation.is_cancelled() {
         return Err(ModelProbeError::Cancelled);
     }
+    let hardware = HardwareInventory::inspect(&paths.data_dir);
+    let cpu_check = hardware.evaluate_cpu_instructions(runtime);
+    if !cpu_check.supported {
+        return Err(ModelProbeError::UnsupportedCpuInstructions(
+            cpu_check.missing_required,
+        ));
+    }
     let model = model_asset(profile).artifact();
     verify_model(paths, model, cancellation)?;
     if cancellation.is_cancelled() {
@@ -181,7 +196,6 @@ pub fn probe_cached_model_with_options(
     if cancellation.is_cancelled() {
         return Err(ModelProbeError::Cancelled);
     }
-    let hardware = HardwareInventory::inspect(&paths.data_dir);
     let preflight = ModelPreflight::evaluate(profile, &hardware);
     admit_hardware(preflight.status(), options.allow_experimental)?;
     let default_ceiling = preflight.requirements().required_available_memory_bytes();
@@ -207,6 +221,12 @@ pub fn probe_cached_model_with_options(
             return Err(ModelProbeError::Cancelled);
         }
         let hardware = HardwareInventory::inspect(&paths.data_dir);
+        let cpu_check = hardware.evaluate_cpu_instructions(runtime);
+        if !cpu_check.supported {
+            return Err(ModelProbeError::UnsupportedCpuInstructions(
+                cpu_check.missing_required,
+            ));
+        }
         admit_hardware(
             ModelPreflight::evaluate(profile, &hardware).status(),
             options.allow_experimental,
@@ -832,6 +852,44 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             probe_cached_model(&paths, *runtime, LocalProfile::Lite, true, &cancelled),
             Err(ModelProbeError::Cancelled)
         );
+    }
+
+    #[test]
+    fn cpu_instruction_gate_rejects_missing_features_before_execution() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(
+            temp.path().join("config"),
+            temp.path().join("data"),
+            temp.path().join("cache"),
+        )
+        .unwrap();
+        let base_runtime = crate::assets::runtime_asset_for("linux", "x86_64").unwrap();
+        let runtime_missing_instructions = RuntimeAsset::test_fixture_with_features(
+            base_runtime.operating_system(),
+            base_runtime.architecture(),
+            base_runtime.artifact(),
+            &["missing_cpu_feature_xyz"],
+            &[],
+            (1, 10),
+        );
+        let result = probe_cached_model_with_options(
+            &paths,
+            runtime_missing_instructions,
+            LocalProfile::Lite,
+            ModelProbeOptions {
+                confirmed: true,
+                allow_experimental: false,
+                memory_ceiling_bytes: None,
+            },
+            &CancellationToken::new(),
+        );
+        assert_eq!(
+            result,
+            Err(ModelProbeError::UnsupportedCpuInstructions(vec![
+                "missing_cpu_feature_xyz"
+            ]))
+        );
+        assert!(!paths.data_dir.exists());
     }
 
     #[test]

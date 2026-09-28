@@ -44,11 +44,12 @@ impl RuntimeProbeOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeProbeError {
     ConsentRequired,
     InstallMissing,
     InstallInvalid,
+    UnsupportedCpuInstructions(Vec<&'static str>),
     Cancelled,
     Randomness,
     Spawn,
@@ -67,6 +68,13 @@ impl fmt::Display for RuntimeProbeError {
             Self::ConsentRequired => "runtime execution requires explicit consent",
             Self::InstallMissing => "the pinned runtime has not been installed",
             Self::InstallInvalid => "the installed runtime failed full inventory verification",
+            Self::UnsupportedCpuInstructions(missing) => {
+                return write!(
+                    formatter,
+                    "the host CPU lacks required instructions for this runtime: {}",
+                    missing.join(", ")
+                );
+            }
             Self::Cancelled => "runtime probe was cancelled",
             Self::Randomness => "an internal API key could not be generated",
             Self::Spawn => "the pinned runtime could not be started",
@@ -105,6 +113,13 @@ pub fn probe_installed_runtime(
     }
     if cancellation.is_cancelled() {
         return Err(RuntimeProbeError::Cancelled);
+    }
+    let hardware = crate::hardware::HardwareInventory::inspect(&paths.models_dir());
+    let cpu_check = hardware.evaluate_cpu_instructions(runtime);
+    if !cpu_check.supported {
+        return Err(RuntimeProbeError::UnsupportedCpuInstructions(
+            cpu_check.missing_required,
+        ));
     }
     let installed = inspect_installed_runtime_cancellable(
         paths,
@@ -933,5 +948,33 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             Err(RuntimeProbeError::ProcessExited),
         );
         exited.assert_child_reaped();
+    }
+
+    #[test]
+    fn runtime_probe_fails_early_when_cpu_instructions_unsupported() {
+        let fixture = Fixture::new("healthy");
+        let asset = fixture.runtime.artifact();
+        let runtime_missing_instructions = RuntimeAsset::test_fixture_with_features(
+            fixture.runtime.operating_system(),
+            fixture.runtime.architecture(),
+            asset,
+            &["nonexistent_cpu_instruction_xyz"],
+            &[],
+            (1, 10),
+        );
+        let result = probe_installed_runtime(
+            &fixture.paths,
+            runtime_missing_instructions,
+            RuntimeProbeOptions::confirmed(),
+            &CancellationToken::new(),
+        );
+        assert_eq!(
+            result,
+            Err(RuntimeProbeError::UnsupportedCpuInstructions(vec![
+                "nonexistent_cpu_instruction_xyz"
+            ]))
+        );
+        // Server was never spawned because CPU instruction check failed before install inspection/execution
+        assert!(!fixture.pid_path.exists());
     }
 }

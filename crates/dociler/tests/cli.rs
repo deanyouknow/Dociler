@@ -214,6 +214,7 @@ fn model_status_is_read_only_and_reports_both_preflight_tiers() {
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("Memory:"));
     assert!(text.contains("CPU:"));
+    assert!(text.contains("Runtime CPU instructions:"));
     assert!(text.contains("Asset storage:"));
     assert!(text.contains("dociler-lite:"));
     assert!(text.contains("dociler-pro:"));
@@ -232,6 +233,8 @@ fn model_manifest_listing_and_verification_are_read_only() {
     assert!(text.contains("dociler-lite:"));
     assert!(text.contains("dociler-pro:"));
     assert!(text.contains("llama.cpp runtime: v0.4.0/b10809"));
+    assert!(text.contains("required-cpu="));
+    assert!(text.contains("expected-libraries="));
     assert!(text.contains("cache=missing"));
     assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
 

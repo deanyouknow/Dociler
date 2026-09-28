@@ -267,9 +267,10 @@ def run(executable: pathlib.Path) -> None:
                 raise AssertionError("onboarding verification did not reach the mock provider")
             config_path = root / "config" / "config.json"
             wait_for_file(config_path)
-            session.drain_for(0.5)
+            session.drain_for(1.0)
 
             session.resize(30, 120)
+            session.drain_for(0.2)
             session.send_line("first PTY prompt")
             if not provider.first_sent.wait(5):
                 raise AssertionError("first chat turn did not reach the mock provider")

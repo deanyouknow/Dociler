@@ -302,7 +302,7 @@ pub fn inspect_installed_runtime_cancellable(
     cancellation: Option<&CancellationToken>,
 ) -> RuntimeInstallInspection {
     let path = install_path(paths, runtime);
-    let server_path = path.join(expected_server_file(runtime));
+    let server_path = path.join(runtime.expected_server_file());
     let state = verify_install_at(&path, runtime, level, cancellation);
     RuntimeInstallInspection {
         path,
@@ -320,27 +320,19 @@ fn install_path(paths: &AppPaths, runtime: RuntimeAsset) -> PathBuf {
         .join(INSTALL_DIRECTORY)
 }
 
-fn expected_server_file(runtime: RuntimeAsset) -> &'static str {
-    if runtime.operating_system() == "windows" {
-        "llama-server.exe"
-    } else {
-        "llama-server"
-    }
-}
-
 fn archive_layout(runtime: RuntimeAsset) -> Result<ArchiveLayout, RuntimeInstallError> {
     let file_name = runtime.artifact().file_name();
     if file_name.ends_with(".tar.gz") && runtime.operating_system() != "windows" {
         Ok(ArchiveLayout {
             format: ArchiveFormat::TarGz,
             root: Some(format!("llama-{LLAMA_CPP_BUILD}")),
-            server_file: expected_server_file(runtime).to_owned(),
+            server_file: runtime.expected_server_file().to_owned(),
         })
     } else if file_name.ends_with(".zip") && runtime.operating_system() == "windows" {
         Ok(ArchiveLayout {
             format: ArchiveFormat::Zip,
             root: None,
-            server_file: expected_server_file(runtime).to_owned(),
+            server_file: runtime.expected_server_file().to_owned(),
         })
     } else {
         Err(RuntimeInstallError::UnsupportedArchive)
@@ -781,12 +773,15 @@ fn verify_install_at(
         Ok(inventory) => inventory,
         Err(_) => return RuntimeInstallState::Invalid,
     };
+    let (min_files, max_files) = runtime.expected_file_count_range();
     if inventory.schema != 1
         || inventory.manifest_id != MANIFEST_ID
         || inventory.asset_id != runtime.artifact().id()
         || inventory.archive_sha256 != runtime.artifact().sha256()
-        || inventory.server_file != expected_server_file(runtime)
+        || inventory.server_file != runtime.expected_server_file()
         || inventory.files.is_empty()
+        || inventory.files.len() < min_files
+        || inventory.files.len() > max_files
         || inventory.files.len() > MAX_ARCHIVE_ENTRIES
     {
         return RuntimeInstallState::Invalid;
@@ -822,8 +817,13 @@ fn verify_install_at(
             return RuntimeInstallState::Invalid;
         }
     }
-    if !expected.contains_key(Path::new(expected_server_file(runtime))) {
+    if !expected.contains_key(Path::new(runtime.expected_server_file())) {
         return RuntimeInstallState::Invalid;
+    }
+    for &library in runtime.expected_shared_libraries() {
+        if !expected.contains_key(Path::new(library)) {
+            return RuntimeInstallState::Invalid;
+        }
     }
 
     let mut stack = vec![root.to_path_buf()];
@@ -872,7 +872,7 @@ fn verify_install_at(
                     return RuntimeInstallState::Invalid;
                 }
                 #[cfg(unix)]
-                if relative == Path::new(expected_server_file(runtime)) {
+                if relative == Path::new(runtime.expected_server_file()) {
                     use std::os::unix::fs::PermissionsExt;
                     if metadata.permissions().mode() & 0o111 == 0 {
                         return RuntimeInstallState::Invalid;
@@ -1384,5 +1384,86 @@ mod tests {
         assert_eq!(inspection.state(), RuntimeInstallState::Cancelled);
         assert!(inspection.state().is_cancelled());
         assert!(!inspection.state().is_verified());
+    }
+
+    #[test]
+    fn installed_runtime_verifies_required_shared_libraries_and_file_count_range() {
+        let bytes = tar_file(
+            &[
+                ("llama-b10809/llama-server", b"server"),
+                ("llama-b10809/libllama.so", b"llama"),
+            ],
+            &[],
+            false,
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let app_paths = paths(directory.path());
+        let hash: &'static str =
+            Box::leak(format!("{:x}", Sha256::digest(&bytes)).into_boxed_str());
+        let asset = AssetSpec::test_fixture(
+            crate::assets::AssetKind::RuntimeArchive,
+            "runtime-test",
+            "fixture.tar.gz",
+            bytes.len() as u64,
+            hash,
+        );
+        let path = asset.cache_path(&app_paths);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, &bytes).unwrap();
+
+        // Runtime requiring libllama.so and libggml.so (libggml.so is missing from archive)
+        let runtime_missing_lib = RuntimeAsset::test_fixture_with_features(
+            "linux",
+            "x86_64",
+            asset,
+            &[],
+            &["libllama.so", "libggml.so"],
+            (1, 10),
+        );
+        let install_result = install_cached_runtime(
+            &app_paths,
+            runtime_missing_lib,
+            RuntimeInstallOptions::confirmed(),
+            &CancellationToken::new(),
+        );
+        // Publication requires verify_install_at to pass; missing required lib fails verification
+        assert_eq!(install_result, Err(RuntimeInstallError::UnsafeArchive));
+
+        // Runtime with file count range requiring at least 5 files (archive only has 2)
+        let runtime_count_fail = RuntimeAsset::test_fixture_with_features(
+            "linux",
+            "x86_64",
+            asset,
+            &[],
+            &["libllama.so"],
+            (5, 10),
+        );
+        let count_result = install_cached_runtime(
+            &app_paths,
+            runtime_count_fail,
+            RuntimeInstallOptions::confirmed(),
+            &CancellationToken::new(),
+        );
+        assert_eq!(count_result, Err(RuntimeInstallError::UnsafeArchive));
+
+        // Runtime matching archive contents (has libllama.so, 2 files is in range 1..=5)
+        let runtime_ok = RuntimeAsset::test_fixture_with_features(
+            "linux",
+            "x86_64",
+            asset,
+            &[],
+            &["libllama.so"],
+            (1, 5),
+        );
+        let ok_result = install_cached_runtime(
+            &app_paths,
+            runtime_ok,
+            RuntimeInstallOptions::confirmed(),
+            &CancellationToken::new(),
+        );
+        assert!(ok_result.is_ok());
+        let inspection =
+            inspect_installed_runtime(&app_paths, runtime_ok, VerificationLevel::Sha256);
+        assert_eq!(inspection.state(), RuntimeInstallState::Verified);
     }
 }

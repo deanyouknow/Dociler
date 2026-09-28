@@ -129,6 +129,11 @@ pub struct RuntimeAsset {
     architecture: &'static str,
     backend: &'static str,
     artifact: AssetSpec,
+    required_cpu_features: &'static [&'static str],
+    recommended_cpu_features: &'static [&'static str],
+    expected_server_file: &'static str,
+    expected_shared_libraries: &'static [&'static str],
+    expected_file_count_range: (usize, usize),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -137,6 +142,11 @@ struct RuntimeTarget {
     architecture: &'static str,
     backend: &'static str,
     cache_key: &'static str,
+    required_cpu_features: &'static [&'static str],
+    recommended_cpu_features: &'static [&'static str],
+    expected_server_file: &'static str,
+    expected_shared_libraries: &'static [&'static str],
+    expected_file_count_range: (usize, usize),
 }
 
 impl RuntimeAsset {
@@ -151,6 +161,41 @@ impl RuntimeAsset {
             architecture,
             backend: "test",
             artifact,
+            required_cpu_features: &[],
+            recommended_cpu_features: &[],
+            expected_server_file: if matches!(operating_system.as_bytes(), b"windows") {
+                "llama-server.exe"
+            } else {
+                "llama-server"
+            },
+            expected_shared_libraries: &[],
+            expected_file_count_range: (1, 256),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn test_fixture_with_features(
+        operating_system: &'static str,
+        architecture: &'static str,
+        artifact: AssetSpec,
+        required_cpu_features: &'static [&'static str],
+        expected_shared_libraries: &'static [&'static str],
+        expected_file_count_range: (usize, usize),
+    ) -> Self {
+        Self {
+            operating_system,
+            architecture,
+            backend: "test",
+            artifact,
+            required_cpu_features,
+            recommended_cpu_features: &[],
+            expected_server_file: if matches!(operating_system.as_bytes(), b"windows") {
+                "llama-server.exe"
+            } else {
+                "llama-server"
+            },
+            expected_shared_libraries,
+            expected_file_count_range,
         }
     }
 
@@ -168,6 +213,26 @@ impl RuntimeAsset {
 
     pub const fn artifact(self) -> AssetSpec {
         self.artifact
+    }
+
+    pub const fn required_cpu_features(self) -> &'static [&'static str] {
+        self.required_cpu_features
+    }
+
+    pub const fn recommended_cpu_features(self) -> &'static [&'static str] {
+        self.recommended_cpu_features
+    }
+
+    pub const fn expected_server_file(self) -> &'static str {
+        self.expected_server_file
+    }
+
+    pub const fn expected_shared_libraries(self) -> &'static [&'static str] {
+        self.expected_shared_libraries
+    }
+
+    pub const fn expected_file_count_range(self) -> (usize, usize) {
+        self.expected_file_count_range
     }
 }
 
@@ -213,6 +278,11 @@ pub const RUNTIME_ASSETS: [RuntimeAsset; 5] = [
             architecture: "aarch64",
             backend: "metal",
             cache_key: "macos-aarch64-metal",
+            required_cpu_features: &["neon"],
+            recommended_cpu_features: &[],
+            expected_server_file: "llama-server",
+            expected_shared_libraries: &["libllama.dylib", "libggml.dylib"],
+            expected_file_count_range: (50, 75),
         },
         "llama-b10809-bin-macos-arm64.tar.gz",
         "https://github.com/ggml-org/llama.cpp/releases/download/b10809/llama-b10809-bin-macos-arm64.tar.gz",
@@ -225,6 +295,11 @@ pub const RUNTIME_ASSETS: [RuntimeAsset; 5] = [
             architecture: "x86_64",
             backend: "metal",
             cache_key: "macos-x86_64-metal",
+            required_cpu_features: &["sse4.2"],
+            recommended_cpu_features: &["avx", "avx2", "fma"],
+            expected_server_file: "llama-server",
+            expected_shared_libraries: &["libllama.dylib", "libggml.dylib"],
+            expected_file_count_range: (50, 75),
         },
         "llama-b10809-bin-macos-x64.tar.gz",
         "https://github.com/ggml-org/llama.cpp/releases/download/b10809/llama-b10809-bin-macos-x64.tar.gz",
@@ -237,6 +312,11 @@ pub const RUNTIME_ASSETS: [RuntimeAsset; 5] = [
             architecture: "aarch64",
             backend: "cpu",
             cache_key: "linux-aarch64-cpu",
+            required_cpu_features: &["neon"],
+            recommended_cpu_features: &[],
+            expected_server_file: "llama-server",
+            expected_shared_libraries: &["libllama.so", "libggml.so"],
+            expected_file_count_range: (50, 75),
         },
         "llama-b10809-bin-ubuntu-arm64.tar.gz",
         "https://github.com/ggml-org/llama.cpp/releases/download/b10809/llama-b10809-bin-ubuntu-arm64.tar.gz",
@@ -249,6 +329,11 @@ pub const RUNTIME_ASSETS: [RuntimeAsset; 5] = [
             architecture: "x86_64",
             backend: "cpu",
             cache_key: "linux-x86_64-cpu",
+            required_cpu_features: &["avx", "avx2"],
+            recommended_cpu_features: &["fma", "avx512f"],
+            expected_server_file: "llama-server",
+            expected_shared_libraries: &["libllama.so", "libggml.so"],
+            expected_file_count_range: (50, 75),
         },
         "llama-b10809-bin-ubuntu-x64.tar.gz",
         "https://github.com/ggml-org/llama.cpp/releases/download/b10809/llama-b10809-bin-ubuntu-x64.tar.gz",
@@ -261,6 +346,11 @@ pub const RUNTIME_ASSETS: [RuntimeAsset; 5] = [
             architecture: "x86_64",
             backend: "cpu",
             cache_key: "windows-x86_64-cpu",
+            required_cpu_features: &["avx", "avx2"],
+            recommended_cpu_features: &["fma", "avx512f"],
+            expected_server_file: "llama-server.exe",
+            expected_shared_libraries: &["llama.dll", "ggml.dll"],
+            expected_file_count_range: (50, 75),
         },
         "llama-b10809-bin-win-cpu-x64.zip",
         "https://github.com/ggml-org/llama.cpp/releases/download/b10809/llama-b10809-bin-win-cpu-x64.zip",
@@ -289,6 +379,11 @@ const fn runtime_asset(
             byte_size,
             sha256,
         },
+        required_cpu_features: target.required_cpu_features,
+        recommended_cpu_features: target.recommended_cpu_features,
+        expected_server_file: target.expected_server_file,
+        expected_shared_libraries: target.expected_shared_libraries,
+        expected_file_count_range: target.expected_file_count_range,
     }
 }
 
@@ -958,5 +1053,18 @@ mod tests {
             remove_cached_assets(&paths, ModelRemoveTarget::Profile(LocalProfile::Lite), true),
             Err(ModelRemovalError::UnsafePath)
         );
+    }
+
+    #[test]
+    fn runtime_assets_have_compiled_inventory_and_cpu_instruction_manifest() {
+        for runtime in &RUNTIME_ASSETS {
+            assert!(!runtime.required_cpu_features().is_empty());
+            assert!(!runtime.expected_server_file().is_empty());
+            assert!(!runtime.expected_shared_libraries().is_empty());
+            let (min_files, max_files) = runtime.expected_file_count_range();
+            assert!(min_files > 0);
+            assert!(max_files >= min_files);
+            assert!(max_files <= 256);
+        }
     }
 }

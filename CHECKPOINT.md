@@ -1,6 +1,6 @@
 # Project Checkpoint
 
-Last updated: 2026-09-26T19:01:56Z
+Last updated: 2026-09-28T02:54:00Z
 
 ## Current status
 
@@ -252,6 +252,19 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
   repetition to purge corrupted/tampered files. Added ADR-027, updated CLI UX and
   model/runtime documentation, and added three comprehensive TUI unit tests. (Total
   suite: 124 passed, 1 ignored; PTY integration passed).
+- Added compiled per-target runtime inventory and CPU-instruction release admission gate.
+  Defined compiled release manifests on `RuntimeAsset` across all five official targets
+  (`macos-aarch64-metal`, `macos-x86_64-metal`, `linux-aarch64-cpu`, `linux-x86_64-cpu`,
+  `windows-x86_64-cpu`) specifying `required_cpu_features`, `recommended_cpu_features`,
+  `expected_server_file`, `expected_shared_libraries`, and `expected_file_count_range`.
+  Added `HardwareInventory::evaluate_cpu_instructions` to preflight host CPU capabilities
+  and report exact missing instructions. Runtime probe and model probe evaluate CPU
+  compatibility early before expensive multi-gigabyte GGUF hashing or runtime process
+  spawning, returning `UnsupportedCpuInstructions` if required instructions are missing.
+  Runtime installation verification (`verify_install_at`) enforces that installed trees
+  contain the exact server binary, all required shared libraries, and file counts within
+  bounds before publication. Added ADR-028, updated CLI output, TUI `/model status`,
+  documentation, and tests. (Total suite: 126 passed, 1 ignored; PTY integration passed).
 
 ## Work in progress
 
@@ -260,12 +273,9 @@ None; clean tree ready for commit.
 ## Next recommended task
 
 Continue M4 by verifying signal cancellation during an actual long-running pinned
-Lite/Pro load or adding a compiled per-file/CPU-instruction release manifest.
-Then attempt real Lite/Pro diagnostics, and repeat native signal/model checks
-on macOS/Windows/Linux ARM64 with pinned runtimes. Keep local chat disabled until
-full-context memory and model-quality gates pass. The compiled per-file/
-CPU-instruction release manifest and hosted native platform validation remain
-separate required units.
+Lite/Pro load or attempting real Lite/Pro diagnostics under process-group memory limits.
+Then repeat native signal/model checks on macOS/Windows/Linux ARM64 with pinned runtimes.
+Keep local chat disabled until full-context memory and model-quality gates pass.
 Implementation remains authorized.
 
 ## Blockers
@@ -376,8 +386,28 @@ repository or shell startup files. Use the normal rustup setup described in
   badge in the header, and fails prompt attempts closed pending release
   qualification; `/model remove` and `/model repair` require exact typed confirmation
   and enforce cache directory containment; `/connect` switches backend back to remote.
+- ADR-028: compiled per-target runtime inventory and CPU-instruction release admission
+  gate; compile expected binaries/libraries and required/recommended CPU instructions
+  into `RuntimeAsset`; preflight host CPU capabilities and reject missing instructions early
+  before multi-gigabyte GGUF hashing or child execution; enforce installed server and
+  shared-library manifests in `verify_install_at`.
 
 ## Verification
+
+### M4 Compiled per-target runtime inventory and CPU-instruction admission gate — 2026-09-28
+
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`.
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`.
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (126 tests passed, 1 ignored):
+  - `dociler` bin unit tests: 17 passed.
+  - `dociler` CLI integration tests: 19 passed.
+  - `dociler-core` unit tests: 74 passed, 1 ignored (opt-in real SmolLM2 test).
+  - `foundation`: 11 passed.
+  - `remote`: 5 passed.
+- **passed:** `python3 scripts/test_tui_pty.py target/debug/dociler` (PTY onboarding, health check, multi-turn chat, cancellation, resize, and cleanup).
+- **passed:** `python3 scripts/check_docs.py` (17 Markdown files, 67 relative links, README coverage).
+- **passed:** `git diff --check` (no whitespace or newline errors).
+- **not run:** opt-in real GGUF SmolLM2 test, full-context 8K/16K workloads, native non-Linux platforms.
 
 ### M4 TUI local profile selection, inspection, removal/repair UI, and /model workflow — 2026-09-28
 
@@ -952,3 +982,4 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-28T01:08:00Z | Antigravity | Process-group peak memory accounting and enforceable admission/abort policy | Implement combined host and child process-group peak RSS sampling on Linux, enforceable memory ceiling abort guard during model probing, deterministic tests, docs, and ADR-025 | crates/dociler-core/src/probe_memory.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, crates/dociler/tests/cli.rs, docs/decisions.md, docs/models-and-runtime.md, docs/testing-and-release.md, CHECKPOINT.md | passed: `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (100 tests passed, 1 ignored), `python3 scripts/check_docs.py`, `git diff --check`; not run: real GGUF opt-in test, non-Linux native platforms, full-context quality gates | COMPLETE; M4 PROCESS-GROUP MEMORY GUARD ACTIVE | Attempt real Lite/Pro diagnostics with memory limits and verify signal cancellation during long-running pinned loads |
 | 2026-09-28T01:40:00Z | Antigravity | Model cache removal, repair, download signal cancellation, and loading probe cancellation | Add safe model removal and repair commands in core and CLI, download signal cancellation wiring, and loading-phase probe cancellation test | crates/dociler-core/src/assets.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, crates/dociler/tests/cli.rs, docs/decisions.md, docs/models-and-runtime.md, docs/cli-ux.md, docs/testing-and-release.md, CHECKPOINT.md | passed: `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (107 tests passed, 1 ignored), `python3 scripts/check_docs.py`, `git diff --check`; not run: real GGUF opt-in test, non-Linux native platforms, full-context quality gates | COMPLETE; M4 CACHE LIFECYCLE & CANCELLATION ACTIVE | Verify signal cancellation during an actual long-running pinned Lite/Pro load; attempt real Lite/Pro diagnostics with memory limits |
 | 2026-09-28T02:05:00Z | Antigravity | TUI local profile selection, inspection, removal/repair UI, and /model workflow | Implement /model command in TUI with list, status, info, use, unload, remove, and repair subcommands; local/remote backend switching; tests and docs | crates/dociler/src/tui.rs, docs/cli-ux.md, docs/decisions.md, docs/models-and-runtime.md, CHECKPOINT.md | passed: fmt, clippy -D warnings, 124 workspace tests (1 ignored), test_tui_pty.py, check_docs.py, git diff --check | COMPLETE; M4 TUI LOCAL SELECTION ACTIVE | Verify signal cancellation during long-running Lite/Pro load or implement compiled per-file/CPU-instruction release manifest |
+| 2026-09-28T02:29:00Z | Antigravity | Compiled per-target runtime inventory and CPU-instruction release admission gate | Compile expected binaries/libraries and required/recommended CPU instructions into RuntimeAsset, enforce instruction compatibility in preflight/probes, and validate compiled inventory in runtime installation | crates/dociler-core/src/assets.rs, crates/dociler-core/src/hardware.rs, crates/dociler-core/src/runtime_install.rs, crates/dociler-core/src/runtime_probe.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, crates/dociler/src/tui.rs, crates/dociler/tests/cli.rs, scripts/test_tui_pty.py, docs/decisions.md, docs/models-and-runtime.md, CHECKPOINT.md | passed: cargo fmt --check, clippy -D warnings, 126 workspace tests (1 ignored), test_tui_pty.py, check_docs.py, git diff --check | COMPLETE; M4 RUNTIME INVENTORY & CPU GATE ACTIVE | Attempt real Lite/Pro diagnostics with memory limits and verify signal cancellation during long-running pinned loads |

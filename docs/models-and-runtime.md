@@ -26,17 +26,9 @@ The semantic release points to the `b10809` binary build. Manifest version
 | Linux x86-64 | CPU | `llama-b10809-bin-ubuntu-x64.tar.gz` | 16,734,586 | `5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941` |
 | Windows x86-64 | CPU | `llama-b10809-bin-win-cpu-x64.zip` | 18,407,457 | `9df3158ed228a641a4b127942d7f459f24c9e13f04682659d05c00c80099b6b5` |
 
-Before runtime execution is enabled, the release manifest must additionally
-list extracted executable/shared-library inventory and supported CPU
-instructions. Never resolve `latest` during installation. Runtime upgrades
-require the full platform, model, memory, and API regression suite.
-The confirmed, short-lived diagnostic probe below is not release-enabled local
-inference; the compiled inventory and CPU-instruction release gate remains open.
+The release manifest defines compiled per-target release metadata (`RuntimeAsset`) across all five official targets, listing the expected server executable, required shared libraries (e.g., `libllama.so`, `libggml.so`, `ggml-metal.metal`), expected file count bounds, and required/recommended CPU instruction flags (e.g. AVX/AVX2 on x86_64, NEON on aarch64). Hardware preflight evaluates host CPU instructions before runtime launch or multi-gigabyte GGUF hashing. Never resolve `latest` during installation. Runtime upgrades require the full platform, model, memory, and API regression suite. The confirmed, short-lived diagnostic probe below is not release-enabled local inference; local chat remains strictly disabled until full-context memory and quality gates pass.
 
-Archive metadata, read-only cache verification, bounded extraction, installed
-file inventory, a model-free runtime lifecycle probe, and a diagnostic-only
-model-load/tiny-generation probe are implemented. Persistent local inference,
-accelerator qualification, and GPU packages beyond macOS Metal remain pending.
+Archive metadata, read-only cache verification, bounded extraction, compiled installed file/library inventory verification, host CPU instruction preflight evaluation, a model-free runtime lifecycle probe, and a diagnostic-only model-load/tiny-generation probe are implemented. Persistent local inference, accelerator qualification, and GPU packages beyond macOS Metal remain pending.
 
 ## Primary model profiles
 

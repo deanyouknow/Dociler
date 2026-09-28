@@ -965,6 +965,24 @@ impl App {
                     inventory.recommended_threads()
                 ));
                 lines.push(format!("  CPU features: {cpu_features}"));
+                if let Some(runtime) = current_runtime_asset() {
+                    let cpu_check = inventory.evaluate_cpu_instructions(*runtime);
+                    if cpu_check.supported {
+                        lines.push(format!(
+                            "  Runtime CPU: satisfied (required: {})",
+                            if runtime.required_cpu_features().is_empty() {
+                                "none".to_owned()
+                            } else {
+                                runtime.required_cpu_features().join(", ")
+                            }
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "  Runtime CPU: missing required ({})",
+                            cpu_check.missing_required.join(", ")
+                        ));
+                    }
+                }
                 lines.push(format!("  Disk available: {disk_space}"));
                 lines.push(format!(
                     "  Admission Lite: {}",
@@ -2352,6 +2370,7 @@ mod tests {
         assert!(status.contains("Hardware & Admission Status:"));
         assert!(status.contains("RAM:"));
         assert!(status.contains("CPU:"));
+        assert!(status.contains("Runtime CPU:"));
         assert!(status.contains("Disk available:"));
         assert!(status.contains("Admission Lite:"));
         assert!(status.contains("Admission Pro:"));
