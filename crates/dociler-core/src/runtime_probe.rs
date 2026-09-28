@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 use crate::assets::{LLAMA_CPP_BUILD, LLAMA_CPP_COMMIT, RuntimeAsset, VerificationLevel};
 use crate::cancellation::CancellationToken;
 use crate::paths::AppPaths;
-use crate::runtime_install::{RuntimeInstallState, inspect_installed_runtime};
+use crate::runtime_install::{RuntimeInstallState, inspect_installed_runtime_cancellable};
 
 pub(crate) const DIAGNOSTIC_LIMIT: usize = 8 * 1024;
 pub(crate) const RESPONSE_LIMIT: u64 = 8 * 1024;
@@ -106,8 +106,14 @@ pub fn probe_installed_runtime(
     if cancellation.is_cancelled() {
         return Err(RuntimeProbeError::Cancelled);
     }
-    let installed = inspect_installed_runtime(paths, runtime, VerificationLevel::Sha256);
+    let installed = inspect_installed_runtime_cancellable(
+        paths,
+        runtime,
+        VerificationLevel::Sha256,
+        Some(cancellation),
+    );
     match installed.state() {
+        RuntimeInstallState::Cancelled => return Err(RuntimeProbeError::Cancelled),
         RuntimeInstallState::Missing => return Err(RuntimeProbeError::InstallMissing),
         RuntimeInstallState::Verified => {}
         RuntimeInstallState::PresentUnverified | RuntimeInstallState::Invalid => {
@@ -166,10 +172,16 @@ fn probe_server_with_timeout(
     if let Some((paths, runtime)) = revalidate {
         // The version check is itself a short-lived child. Close its gap to
         // the actual listening process with a second full inventory pass.
-        if inspect_installed_runtime(paths, runtime, VerificationLevel::Sha256).state()
-            != RuntimeInstallState::Verified
-        {
-            return Err(RuntimeProbeError::InstallInvalid);
+        let inspection = inspect_installed_runtime_cancellable(
+            paths,
+            runtime,
+            VerificationLevel::Sha256,
+            Some(cancellation),
+        );
+        match inspection.state() {
+            RuntimeInstallState::Cancelled => return Err(RuntimeProbeError::Cancelled),
+            RuntimeInstallState::Verified => {}
+            _ => return Err(RuntimeProbeError::InstallInvalid),
         }
         if cancellation.is_cancelled() {
             return Err(RuntimeProbeError::Cancelled);
@@ -815,6 +827,21 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         assert_eq!(result, Err(RuntimeProbeError::Cancelled));
         assert!(start.elapsed() < Duration::from_secs(3));
         fixture.assert_child_reaped();
+    }
+
+    #[test]
+    fn cancellation_stops_before_or_during_inspection() {
+        let fixture = Fixture::new("healthy");
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let result = probe_installed_runtime(
+            &fixture.paths,
+            fixture.runtime,
+            RuntimeProbeOptions::confirmed(),
+            &cancellation,
+        );
+        assert_eq!(result, Err(RuntimeProbeError::Cancelled));
+        assert!(!fixture.pid_path.exists());
     }
 
     #[test]

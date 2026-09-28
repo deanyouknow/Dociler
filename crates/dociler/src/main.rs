@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use dociler_core::assets::{
     CacheState, LLAMA_CPP_BUILD, LLAMA_CPP_COMMIT, LLAMA_CPP_RELEASE, MANIFEST_ID, MODEL_ASSETS,
-    VerificationLevel, current_runtime_asset, inspect_cached_asset,
+    VerificationLevel, current_runtime_asset, inspect_cached_asset_cancellable,
 };
 use dociler_core::chat::CancellationToken;
 use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings, LocalProfile};
@@ -25,7 +25,7 @@ use dociler_core::profiles::{
 use dociler_core::remote::{RemoteClient, RemoteError, RemoteProfile};
 use dociler_core::runtime_install::{
     RuntimeInstallError, RuntimeInstallOptions, RuntimeInstallOutcome, RuntimeInstallState,
-    inspect_installed_runtime, install_cached_runtime,
+    inspect_installed_runtime, inspect_installed_runtime_cancellable, install_cached_runtime,
 };
 use dociler_core::runtime_probe::{
     RuntimeProbeError, RuntimeProbeOptions, probe_installed_runtime,
@@ -346,6 +346,7 @@ enum CommandError {
     RuntimeProbe(RuntimeProbeError),
     ModelProbe(ModelProbeError),
     Signal,
+    Cancelled,
     Remote(RemoteError),
     Terminal,
 }
@@ -530,6 +531,7 @@ fn cache_state_label(state: &CacheState) -> String {
         CacheState::HashMismatch { .. } => "invalid SHA-256".to_owned(),
         CacheState::UnsafeFileType => "unsafe path or file type".to_owned(),
         CacheState::Unreadable(_) => "unreadable".to_owned(),
+        CacheState::Cancelled => "cancelled".to_owned(),
     }
 }
 
@@ -538,10 +540,11 @@ fn print_model_cache(
     app_paths: &AppPaths,
     profile: LocalProfile,
     level: VerificationLevel,
+    cancellation: Option<&CancellationToken>,
 ) -> io::Result<bool> {
     let model = dociler_core::assets::model_asset(profile);
     let artifact = model.artifact();
-    let inspection = inspect_cached_asset(app_paths, artifact, level);
+    let inspection = inspect_cached_asset_cancellable(app_paths, artifact, level, cancellation);
     writeln!(
         output,
         "{}: {} {} Q4_K_M, {} bytes, cache={}",
@@ -567,6 +570,7 @@ fn print_runtime_cache(
     output: &mut impl Write,
     app_paths: &AppPaths,
     level: VerificationLevel,
+    cancellation: Option<&CancellationToken>,
 ) -> io::Result<bool> {
     let Some(runtime) = current_runtime_asset() else {
         writeln!(
@@ -577,7 +581,8 @@ fn print_runtime_cache(
         )?;
         return Ok(false);
     };
-    let inspection = inspect_cached_asset(app_paths, runtime.artifact(), level);
+    let inspection =
+        inspect_cached_asset_cancellable(app_paths, runtime.artifact(), level, cancellation);
     writeln!(
         output,
         "llama.cpp runtime: {LLAMA_CPP_RELEASE}/{LLAMA_CPP_BUILD} {}-{} {}, cache={}",
@@ -589,7 +594,7 @@ fn print_runtime_cache(
     writeln!(output, "  source={}", runtime.artifact().source_url())?;
     writeln!(output, "  sha256={}", runtime.artifact().sha256())?;
     writeln!(output, "  file={:?}", inspection.path())?;
-    let installed = inspect_installed_runtime(app_paths, *runtime, level);
+    let installed = inspect_installed_runtime_cancellable(app_paths, *runtime, level, cancellation);
     let installed_state = installed.state();
     writeln!(
         output,
@@ -599,11 +604,14 @@ fn print_runtime_cache(
             RuntimeInstallState::PresentUnverified => "present; checksums not run",
             RuntimeInstallState::Verified => "verified",
             RuntimeInstallState::Invalid => "invalid",
+            RuntimeInstallState::Cancelled => "cancelled",
         },
         installed.path(),
         installed.server_path()
     )?;
-    Ok(inspection.state().is_verified() && installed_state != RuntimeInstallState::Invalid)
+    Ok(inspection.state().is_verified()
+        && installed_state != RuntimeInstallState::Invalid
+        && installed_state != RuntimeInstallState::Cancelled)
 }
 
 fn print_asset_manifest_header(output: &mut impl Write) -> io::Result<()> {
@@ -792,9 +800,10 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                     &app_paths,
                     model.profile(),
                     VerificationLevel::MetadataOnly,
+                    None,
                 )?;
             }
-            print_runtime_cache(output, &app_paths, VerificationLevel::MetadataOnly)?;
+            print_runtime_cache(output, &app_paths, VerificationLevel::MetadataOnly, None)?;
             writeln!(
                 output,
                 "Read-only metadata inspection only; run 'dociler model verify [PROFILE]' for SHA-256 verification."
@@ -802,6 +811,9 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
         }
         Command::ModelVerify { profile } => {
             let app_paths = paths()?;
+            let cancellation = CancellationToken::new();
+            let _signals = cli_signals::CliSignalGuard::install(cancellation.clone())
+                .map_err(|_| CommandError::Signal)?;
             print_asset_manifest_header(output)?;
             let profiles: &[LocalProfile] = match profile {
                 Some(LocalProfile::Lite) => &[LocalProfile::Lite],
@@ -810,10 +822,29 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             };
             let mut verified = true;
             for profile in profiles {
-                verified &=
-                    print_model_cache(output, &app_paths, *profile, VerificationLevel::Sha256)?;
+                if cancellation.is_cancelled() {
+                    break;
+                }
+                verified &= print_model_cache(
+                    output,
+                    &app_paths,
+                    *profile,
+                    VerificationLevel::Sha256,
+                    Some(&cancellation),
+                )?;
             }
-            verified &= print_runtime_cache(output, &app_paths, VerificationLevel::Sha256)?;
+            if !cancellation.is_cancelled() {
+                verified &= print_runtime_cache(
+                    output,
+                    &app_paths,
+                    VerificationLevel::Sha256,
+                    Some(&cancellation),
+                )?;
+            }
+            if cancellation.is_cancelled() {
+                writeln!(output, "Verification was cancelled.")?;
+                return Err(CommandError::Cancelled);
+            }
             writeln!(
                 output,
                 "Verification was read-only; no asset was changed or executed."
@@ -1423,6 +1454,7 @@ fn main() -> ExitCode {
                 CommandError::Signal => {
                     "could not install terminal cancellation handlers; no probe was started."
                 }
+                CommandError::Cancelled => "operation was cancelled.",
                 CommandError::Remote(error) => match error {
                     RemoteError::InvalidProfile => "invalid remote profile name, URL, or model.",
                     RemoteError::UnsafeEndpoint => {

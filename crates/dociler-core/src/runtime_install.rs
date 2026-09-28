@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::assets::{
     AssetSpec, CacheState, LLAMA_CPP_BUILD, MANIFEST_ID, RuntimeAsset, VerificationLevel,
-    inspect_cached_asset,
+    inspect_cached_asset_cancellable,
 };
 use crate::cancellation::CancellationToken;
 use crate::paths::AppPaths;
@@ -54,6 +54,17 @@ pub enum RuntimeInstallState {
     PresentUnverified,
     Verified,
     Invalid,
+    Cancelled,
+}
+
+impl RuntimeInstallState {
+    pub fn is_verified(&self) -> bool {
+        matches!(self, Self::Verified)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,8 +179,16 @@ pub fn install_cached_runtime(
         return Err(RuntimeInstallError::Cancelled);
     }
     let asset = runtime.artifact();
-    match inspect_cached_asset(paths, asset, VerificationLevel::Sha256).state() {
+    match inspect_cached_asset_cancellable(
+        paths,
+        asset,
+        VerificationLevel::Sha256,
+        Some(cancellation),
+    )
+    .state()
+    {
         CacheState::Verified => {}
+        CacheState::Cancelled => return Err(RuntimeInstallError::Cancelled),
         CacheState::Missing => return Err(RuntimeInstallError::ArchiveMissing),
         _ => return Err(RuntimeInstallError::ArchiveUnverified),
     }
@@ -187,8 +206,16 @@ pub fn install_cached_runtime(
         }
     })?;
 
-    match inspect_installed_runtime(paths, runtime, VerificationLevel::Sha256).state() {
+    match inspect_installed_runtime_cancellable(
+        paths,
+        runtime,
+        VerificationLevel::Sha256,
+        Some(cancellation),
+    )
+    .state()
+    {
         RuntimeInstallState::Verified => return Ok(RuntimeInstallOutcome::AlreadyInstalled),
+        RuntimeInstallState::Cancelled => return Err(RuntimeInstallError::Cancelled),
         RuntimeInstallState::Missing => {}
         RuntimeInstallState::PresentUnverified => {
             return Ok(RuntimeInstallOutcome::AlreadyInstalled);
@@ -220,9 +247,16 @@ pub fn install_cached_runtime(
     };
     write_inventory(staging.path(), &inventory)?;
     sync_directory(staging.path())?;
-    if verify_install_at(staging.path(), runtime, VerificationLevel::Sha256)
-        != RuntimeInstallState::Verified
+    if verify_install_at(
+        staging.path(),
+        runtime,
+        VerificationLevel::Sha256,
+        Some(cancellation),
+    ) != RuntimeInstallState::Verified
     {
+        if cancellation.is_cancelled() {
+            return Err(RuntimeInstallError::Cancelled);
+        }
         return Err(RuntimeInstallError::UnsafeArchive);
     }
 
@@ -230,7 +264,13 @@ pub fn install_cached_runtime(
     match fs::rename(staging.path(), &final_path) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return if inspect_installed_runtime(paths, runtime, VerificationLevel::Sha256).state()
+            return if inspect_installed_runtime_cancellable(
+                paths,
+                runtime,
+                VerificationLevel::Sha256,
+                Some(cancellation),
+            )
+            .state()
                 == RuntimeInstallState::Verified
             {
                 Ok(RuntimeInstallOutcome::AlreadyInstalled)
@@ -252,9 +292,18 @@ pub fn inspect_installed_runtime(
     runtime: RuntimeAsset,
     level: VerificationLevel,
 ) -> RuntimeInstallInspection {
+    inspect_installed_runtime_cancellable(paths, runtime, level, None)
+}
+
+pub fn inspect_installed_runtime_cancellable(
+    paths: &AppPaths,
+    runtime: RuntimeAsset,
+    level: VerificationLevel,
+    cancellation: Option<&CancellationToken>,
+) -> RuntimeInstallInspection {
     let path = install_path(paths, runtime);
     let server_path = path.join(expected_server_file(runtime));
-    let state = verify_install_at(&path, runtime, level);
+    let state = verify_install_at(&path, runtime, level, cancellation);
     RuntimeInstallInspection {
         path,
         server_path,
@@ -713,7 +762,11 @@ fn verify_install_at(
     root: &Path,
     runtime: RuntimeAsset,
     level: VerificationLevel,
+    cancellation: Option<&CancellationToken>,
 ) -> RuntimeInstallState {
+    if cancellation.is_some_and(|token| token.is_cancelled()) {
+        return RuntimeInstallState::Cancelled;
+    }
     let root_metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -743,6 +796,9 @@ fn verify_install_at(
     let mut expected_directories = BTreeSet::new();
     let mut expanded_bytes = 0_u64;
     for file in &inventory.files {
+        if cancellation.is_some_and(|token| token.is_cancelled()) {
+            return RuntimeInstallState::Cancelled;
+        }
         let relative = match portable_archive_path(&file.path, None) {
             Ok(Some(relative)) => relative,
             _ => return RuntimeInstallState::Invalid,
@@ -773,11 +829,17 @@ fn verify_install_at(
     let mut stack = vec![root.to_path_buf()];
     let mut observed_files = BTreeSet::new();
     while let Some(directory) = stack.pop() {
+        if cancellation.is_some_and(|token| token.is_cancelled()) {
+            return RuntimeInstallState::Cancelled;
+        }
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(_) => return RuntimeInstallState::Invalid,
         };
         for entry in entries {
+            if cancellation.is_some_and(|token| token.is_cancelled()) {
+                return RuntimeInstallState::Cancelled;
+            }
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => return RuntimeInstallState::Invalid,
@@ -817,8 +879,11 @@ fn verify_install_at(
                     }
                 }
                 if level == VerificationLevel::Sha256 {
-                    let hash = match hash_file(&path, spec.bytes) {
+                    let hash = match hash_file(&path, spec.bytes, cancellation) {
                         Ok(hash) => hash,
+                        Err(RuntimeInstallError::Cancelled) => {
+                            return RuntimeInstallState::Cancelled;
+                        }
                         Err(_) => return RuntimeInstallState::Invalid,
                     };
                     if hash != spec.sha256 {
@@ -829,6 +894,9 @@ fn verify_install_at(
                 return RuntimeInstallState::Invalid;
             }
         }
+    }
+    if cancellation.is_some_and(|token| token.is_cancelled()) {
+        return RuntimeInstallState::Cancelled;
     }
     if observed_files.len() != expected.len() {
         return RuntimeInstallState::Invalid;
@@ -854,12 +922,22 @@ fn read_inventory(root: &Path) -> Result<RuntimeInventory, RuntimeInstallError> 
     serde_json::from_reader(file).map_err(|_| RuntimeInstallError::UnsafeArchive)
 }
 
-fn hash_file(path: &Path, expected: u64) -> Result<String, RuntimeInstallError> {
+fn hash_file(
+    path: &Path,
+    expected: u64,
+    cancellation: Option<&CancellationToken>,
+) -> Result<String, RuntimeInstallError> {
+    if cancellation.is_some_and(|token| token.is_cancelled()) {
+        return Err(RuntimeInstallError::Cancelled);
+    }
     let mut file = open_regular_read(path)?;
     let mut hasher = Sha256::new();
     let mut observed = 0_u64;
     let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
     loop {
+        if cancellation.is_some_and(|token| token.is_cancelled()) {
+            return Err(RuntimeInstallError::Cancelled);
+        }
         let count = file
             .read(&mut buffer)
             .map_err(|error| RuntimeInstallError::Io(error.kind()))?;
@@ -871,6 +949,9 @@ fn hash_file(path: &Path, expected: u64) -> Result<String, RuntimeInstallError> 
             return Err(RuntimeInstallError::UnsafeArchive);
         }
         hasher.update(&buffer[..count]);
+    }
+    if cancellation.is_some_and(|token| token.is_cancelled()) {
+        return Err(RuntimeInstallError::Cancelled);
     }
     if observed != expected {
         return Err(RuntimeInstallError::UnsafeArchive);
@@ -1275,5 +1356,33 @@ mod tests {
             portable_archive_path("safe/nested/file", None).unwrap(),
             Some(PathBuf::from("safe/nested/file"))
         );
+    }
+
+    #[test]
+    fn cancellable_installed_inspection_stops_on_token() {
+        let bytes = tar_file(&[("llama-b10809/llama-server", b"server")], &[], false);
+        let directory = tempfile::tempdir().unwrap();
+        let (app_paths, runtime) =
+            runtime_with_archive(directory.path(), "linux", "fixture.tar.gz", &bytes);
+        install_cached_runtime(
+            &app_paths,
+            runtime,
+            RuntimeInstallOptions::confirmed(),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let inspection = inspect_installed_runtime_cancellable(
+            &app_paths,
+            runtime,
+            VerificationLevel::Sha256,
+            Some(&cancellation),
+        );
+        assert_eq!(inspection.state(), RuntimeInstallState::Cancelled);
+        assert!(inspection.state().is_cancelled());
+        assert!(!inspection.state().is_verified());
     }
 }

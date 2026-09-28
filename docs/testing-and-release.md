@@ -246,7 +246,9 @@ require a nonzero kernel reading. A pinned real 135M GGUF probe produced a
 177,229,824-byte server-only high-water RSS on one Linux x86-64 host; that
 figure is not a supported-tier budget. A scriptable model-free CLI probe
 also returned cancellation after SIGINT during preflight; no server was left
-running.
+running. Deterministic unit tests verify that asset verification and installed
+runtime inventory hashing stop immediately when the cancellation token is
+tripped, returning cancelled status without publishing or caching unverified files.
 These checks do not establish full process-
 group memory accounting, hard memory enforcement, signal cancellation of a
 multi-gigabyte model load, or native macOS/Windows signal behavior. Those remain

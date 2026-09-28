@@ -390,3 +390,27 @@ evidence for the 8/16 GB product targets.
 **Rejected:** Exiting directly from a signal callback, interpreting missing
 `/proc` metrics as zero, imposing an unqualified virtual-memory limit on a
 memory-mapped GGUF, or declaring Lite/Pro qualified from a tiny-model RSS.
+
+## ADR-024: Cooperatively cancellable multi-gigabyte asset and inventory hashing
+
+**Decision:** Wire the cooperative `CancellationToken` into all model artifact and
+installed runtime verification loops. In `inspect_cached_asset_cancellable` and
+`inspect_installed_runtime_cancellable`, poll the cancellation token on every read
+buffer chunk (64 KiB) during SHA-256 computation and between file inventory entries.
+When cancelled, return explicit `CacheState::Cancelled` and
+`RuntimeInstallState::Cancelled` states rather than treating interruption as
+missing, corrupt, or verified. Map cancellation in CLI `model verify` and probe
+workflows to clean exit codes without spawning processes or publishing unverified
+files.
+
+**Why:** Hashing 2.5 GB to 10 GB model files takes significant time on CPU/storage.
+Without chunk-level cancellation checks, terminal signals (SIGINT/Ctrl+C) or probe
+cancellations are delayed until the entire multi-gigabyte hash completes. A
+cooperative check within the buffer loop aborts immediately, releases file
+descriptors and locks, avoids spinning CPU, and guarantees that cancelled
+inspections are never mistakenly published or cached as valid.
+
+**Rejected:** Long-lived unskippable hash loops, spawning threads that are abandoned
+or detached upon signal, treating cancelled verification as asset corruption (which
+could prompt unwanted re-downloads or repairs), or bypassing SHA-256 integrity checks
+when uncancelled.

@@ -17,14 +17,14 @@ use serde_json::{Value, json};
 
 use crate::assets::{
     AssetSpec, CacheState, LLAMA_CPP_BUILD, LLAMA_CPP_COMMIT, RuntimeAsset, VerificationLevel,
-    inspect_cached_asset, model_asset,
+    inspect_cached_asset_cancellable, model_asset,
 };
 use crate::cancellation::CancellationToken;
 use crate::config::LocalProfile;
 use crate::hardware::{HardwareInventory, ModelPreflight, PreflightStatus};
 use crate::paths::AppPaths;
 use crate::probe_memory::ChildMemorySampler;
-use crate::runtime_install::{RuntimeInstallState, inspect_installed_runtime};
+use crate::runtime_install::{RuntimeInstallState, inspect_installed_runtime_cancellable};
 use crate::runtime_probe::{
     DiagnosticCapture, HTTP_TIMEOUT, ManagedChild, POLL_INTERVAL, RuntimeProbeError, check_version,
     fetch_json, isolated_command, make_key, write_private_key,
@@ -98,12 +98,18 @@ pub fn probe_cached_model(
         return Err(ModelProbeError::Cancelled);
     }
     let model = model_asset(profile).artifact();
-    verify_model(paths, model)?;
+    verify_model(paths, model, cancellation)?;
     if cancellation.is_cancelled() {
         return Err(ModelProbeError::Cancelled);
     }
-    let installed = inspect_installed_runtime(paths, runtime, VerificationLevel::Sha256);
+    let installed = inspect_installed_runtime_cancellable(
+        paths,
+        runtime,
+        VerificationLevel::Sha256,
+        Some(cancellation),
+    );
     match installed.state() {
+        RuntimeInstallState::Cancelled => return Err(ModelProbeError::Cancelled),
         RuntimeInstallState::Missing => return Err(ModelProbeError::RuntimeMissing),
         RuntimeInstallState::Verified => {}
         RuntimeInstallState::PresentUnverified | RuntimeInstallState::Invalid => {
@@ -117,14 +123,20 @@ pub fn probe_cached_model(
     admit_hardware(ModelPreflight::evaluate(profile, &hardware).status())?;
     let model_path = model.cache_path(paths);
     let revalidate = || {
-        verify_model(paths, model)?;
+        verify_model(paths, model, cancellation)?;
         if cancellation.is_cancelled() {
             return Err(ModelProbeError::Cancelled);
         }
-        if inspect_installed_runtime(paths, runtime, VerificationLevel::Sha256).state()
-            != RuntimeInstallState::Verified
-        {
-            return Err(ModelProbeError::RuntimeInvalid);
+        let installed = inspect_installed_runtime_cancellable(
+            paths,
+            runtime,
+            VerificationLevel::Sha256,
+            Some(cancellation),
+        );
+        match installed.state() {
+            RuntimeInstallState::Cancelled => return Err(ModelProbeError::Cancelled),
+            RuntimeInstallState::Verified => {}
+            _ => return Err(ModelProbeError::RuntimeInvalid),
         }
         if cancellation.is_cancelled() {
             return Err(ModelProbeError::Cancelled);
@@ -143,9 +155,21 @@ pub fn probe_cached_model(
     )
 }
 
-fn verify_model(paths: &AppPaths, model: AssetSpec) -> Result<(), ModelProbeError> {
-    match inspect_cached_asset(paths, model, VerificationLevel::Sha256).state() {
+fn verify_model(
+    paths: &AppPaths,
+    model: AssetSpec,
+    cancellation: &CancellationToken,
+) -> Result<(), ModelProbeError> {
+    match inspect_cached_asset_cancellable(
+        paths,
+        model,
+        VerificationLevel::Sha256,
+        Some(cancellation),
+    )
+    .state()
+    {
         CacheState::Verified => Ok(()),
+        CacheState::Cancelled => Err(ModelProbeError::Cancelled),
         CacheState::Missing => Err(ModelProbeError::ModelMissing),
         _ => Err(ModelProbeError::ModelInvalid),
     }
@@ -647,11 +671,38 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         let path = fixture.cache_path(&paths);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"hello").unwrap();
-        assert_eq!(verify_model(&paths, fixture), Ok(()));
+        assert_eq!(
+            verify_model(&paths, fixture, &CancellationToken::new()),
+            Ok(())
+        );
         fs::write(&path, b"HELLO").unwrap();
         assert_eq!(
-            verify_model(&paths, fixture),
+            verify_model(&paths, fixture, &CancellationToken::new()),
             Err(ModelProbeError::ModelInvalid)
+        );
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert_eq!(
+            verify_model(&paths, fixture, &cancelled),
+            Err(ModelProbeError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn probe_cached_model_aborts_when_cancelled() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(
+            temp.path().join("config"),
+            temp.path().join("data"),
+            temp.path().join("cache"),
+        )
+        .unwrap();
+        let runtime = crate::assets::runtime_asset_for("linux", "x86_64").unwrap();
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert_eq!(
+            probe_cached_model(&paths, *runtime, LocalProfile::Lite, true, &cancelled),
+            Err(ModelProbeError::Cancelled)
         );
     }
 
@@ -772,9 +823,15 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             105_454_432,
             "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d",
         );
-        verify_model(&paths, fixture).expect("real GGUF fixture must pass SHA-256 verification");
+        verify_model(&paths, fixture, &CancellationToken::new())
+            .expect("real GGUF fixture must pass SHA-256 verification");
         let runtime = crate::assets::runtime_asset_for("linux", "x86_64").unwrap();
-        let installed = inspect_installed_runtime(&paths, *runtime, VerificationLevel::Sha256);
+        let installed = inspect_installed_runtime_cancellable(
+            &paths,
+            *runtime,
+            VerificationLevel::Sha256,
+            None,
+        );
         assert_eq!(installed.state(), RuntimeInstallState::Verified);
         let report = run_model_probe(
             installed.server_path(),
@@ -782,8 +839,14 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             &fixture.cache_path(&paths),
             LocalProfile::Lite,
             || {
-                verify_model(&paths, fixture)?;
-                if inspect_installed_runtime(&paths, *runtime, VerificationLevel::Sha256).state()
+                verify_model(&paths, fixture, &CancellationToken::new())?;
+                if inspect_installed_runtime_cancellable(
+                    &paths,
+                    *runtime,
+                    VerificationLevel::Sha256,
+                    None,
+                )
+                .state()
                     != RuntimeInstallState::Verified
                 {
                     return Err(ModelProbeError::RuntimeInvalid);

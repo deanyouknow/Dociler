@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::cancellation::CancellationToken;
 use crate::config::LocalProfile;
 use crate::paths::AppPaths;
 
@@ -326,11 +327,16 @@ pub enum CacheState {
     HashMismatch { observed: String },
     UnsafeFileType,
     Unreadable(io::ErrorKind),
+    Cancelled,
 }
 
 impl CacheState {
     pub fn is_verified(&self) -> bool {
         matches!(self, Self::Verified)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
     }
 }
 
@@ -355,9 +361,18 @@ pub fn inspect_cached_asset(
     asset: AssetSpec,
     level: VerificationLevel,
 ) -> CacheInspection {
+    inspect_cached_asset_cancellable(paths, asset, level, None)
+}
+
+pub fn inspect_cached_asset_cancellable(
+    paths: &AppPaths,
+    asset: AssetSpec,
+    level: VerificationLevel,
+    cancellation: Option<&CancellationToken>,
+) -> CacheInspection {
     let root = cache_root(paths, asset.kind);
     let path = asset.cache_path(paths);
-    let state = inspect_path(&root, &path, asset, level);
+    let state = inspect_path(&root, &path, asset, level, cancellation);
     CacheInspection { path, state }
 }
 
@@ -373,7 +388,11 @@ fn inspect_path(
     path: &Path,
     asset: AssetSpec,
     level: VerificationLevel,
+    cancellation: Option<&CancellationToken>,
 ) -> CacheState {
+    if cancellation.is_some_and(|token| token.is_cancelled()) {
+        return CacheState::Cancelled;
+    }
     let root_metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return CacheState::Missing,
@@ -389,6 +408,9 @@ fn inspect_path(
     let component_count = relative.components().count();
 
     for (index, component) in relative.components().enumerate() {
+        if cancellation.is_some_and(|token| token.is_cancelled()) {
+            return CacheState::Cancelled;
+        }
         current.push(component);
         let metadata = match fs::symlink_metadata(&current) {
             Ok(metadata) => metadata,
@@ -417,10 +439,17 @@ fn inspect_path(
         return CacheState::PresentUnverified;
     }
 
-    verify_file(path, asset)
+    verify_file(path, asset, cancellation)
 }
 
-fn verify_file(path: &Path, asset: AssetSpec) -> CacheState {
+fn verify_file(
+    path: &Path,
+    asset: AssetSpec,
+    cancellation: Option<&CancellationToken>,
+) -> CacheState {
+    if cancellation.is_some_and(|token| token.is_cancelled()) {
+        return CacheState::Cancelled;
+    }
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) => return CacheState::Unreadable(error.kind()),
@@ -432,6 +461,9 @@ fn verify_file(path: &Path, asset: AssetSpec) -> CacheState {
     let mut observed = 0_u64;
 
     loop {
+        if cancellation.is_some_and(|token| token.is_cancelled()) {
+            return CacheState::Cancelled;
+        }
         let count = match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(count) => count,
@@ -439,6 +471,10 @@ fn verify_file(path: &Path, asset: AssetSpec) -> CacheState {
         };
         observed = observed.saturating_add(count as u64);
         hasher.update(&buffer[..count]);
+    }
+
+    if cancellation.is_some_and(|token| token.is_cancelled()) {
+        return CacheState::Cancelled;
     }
 
     if observed != asset.byte_size {
@@ -582,5 +618,28 @@ mod tests {
             inspect_cached_asset(&paths, artifact, VerificationLevel::Sha256).state(),
             &CacheState::UnsafeFileType
         );
+    }
+
+    #[test]
+    fn cancellable_inspection_stops_on_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let artifact = fixture_asset();
+        let path = artifact.cache_path(&paths);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"hello").unwrap();
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let inspection = inspect_cached_asset_cancellable(
+            &paths,
+            artifact,
+            VerificationLevel::Sha256,
+            Some(&cancellation),
+        );
+        assert_eq!(inspection.state(), &CacheState::Cancelled);
+        assert!(inspection.state().is_cancelled());
+        assert!(!inspection.state().is_verified());
     }
 }

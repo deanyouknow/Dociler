@@ -12,7 +12,9 @@ use reqwest::header::{ACCEPT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use reqwest::{StatusCode, Url};
 use sha2::{Digest, Sha256};
 
-use crate::assets::{AssetKind, AssetSpec, CacheState, VerificationLevel, inspect_cached_asset};
+use crate::assets::{
+    AssetKind, AssetSpec, CacheState, VerificationLevel, inspect_cached_asset_cancellable,
+};
 use crate::cancellation::CancellationToken;
 use crate::paths::AppPaths;
 
@@ -147,8 +149,16 @@ fn download_from_url(
         }
     })?;
 
-    match inspect_cached_asset(paths, asset, VerificationLevel::Sha256).state() {
+    match inspect_cached_asset_cancellable(
+        paths,
+        asset,
+        VerificationLevel::Sha256,
+        Some(cancellation),
+    )
+    .state()
+    {
         CacheState::Verified => return Ok(DownloadOutcome::AlreadyVerified),
+        CacheState::Cancelled => return Err(DownloadError::Cancelled),
         CacheState::Missing => {}
         _ => return Err(DownloadError::ExistingInvalid),
     }
@@ -206,9 +216,14 @@ fn download_from_url(
     match fs::hard_link(&partial_path, &final_path) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return if inspect_cached_asset(paths, asset, VerificationLevel::Sha256)
-                .state()
-                .is_verified()
+            return if inspect_cached_asset_cancellable(
+                paths,
+                asset,
+                VerificationLevel::Sha256,
+                Some(cancellation),
+            )
+            .state()
+            .is_verified()
             {
                 Ok(DownloadOutcome::AlreadyVerified)
             } else {

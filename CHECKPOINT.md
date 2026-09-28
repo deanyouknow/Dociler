@@ -216,22 +216,26 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
   pinned tiny GGUF test recorded 177,229,824 bytes on one Linux x86-64 host;
   this excludes Dociler and document work and is not release qualification.
   Added signal/process-group/memory tests and ADR-023.
+- Added cooperative cancellation to multi-gigabyte asset and installed runtime
+  inventory hashing loops across core and CLI probe paths. Wired cancellation
+  tokens into chunked buffer reads (64 KiB), ensuring immediate termination
+  upon signal/token trip and avoiding false positive verification or unverified
+  caching. Added unit tests in dociler-core (assets, runtime_install,
+  runtime_probe, model_probe), updated CLI model verify signal handling,
+  updated docs, and added ADR-024.
 
 ## Work in progress
 
-No implementation or documentation unit is currently in progress. The user
-requested an agent-transition export on 2026-09-26; HANDOFF.md and the README
-now provide that context. The handoff started from a clean tree at `9e0384b`,
-with no overlapping user changes. Handoff edits are saved locally, not committed
-or pushed in this unit. M1–M4 hosted/native execution remains unverified outside
-this Linux x86-64 environment. M4 profile admission remains incomplete.
+None. Cooperative cancellation across multi-gigabyte asset and installed runtime
+inventory hashing loops is implemented, tested, and documented. Clean tree ready
+for next bounded M4 task.
 
 ## Next recommended task
 
 Continue M4 by designing and testing full process-group peak memory accounting
 and an enforceable admission/abort policy that includes Dociler, the runtime,
 and document work on constrained hosts. Verify signal cancellation during an
-actual long-running pinned Lite/Pro load; make multi-GB rehash cancellable.
+actual long-running pinned Lite/Pro load.
 Then attempt real Lite/Pro diagnostics, and repeat native signal/model checks
 on macOS/Windows/Linux ARM64 with pinned runtimes. Keep local chat disabled until
 full-context memory and model-quality gates pass. The compiled per-file/
@@ -860,3 +864,4 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-24T18:43:16Z | Codex `/root` | Complete M4 scoped probe-signal and child-RSS diagnostic unit | Added scoped Unix/Windows signal cancellation, Unix child process-group separation, rehash-phase cancellation checks, Linux `VmHWM` observer, CLI output, tests, ADR-023, and honest limits; resolves 18:22 entry | Cargo manifests/lock, core probe/memory modules, CLI signal/main modules, architecture/CLI/development/runtime/privacy/testing/decision docs, CHECKPOINT.md | passed: 108 debug and optimized regular tests, opt-in real GGUF with 177,229,824-byte child RSS, CLI SIGINT preflight smoke, strict Clippy, fmt, Rust docs, Markdown/diff; failed then resolved: absent temporary crate cache and first fmt check; not run: full process-group/hard limit, actual Lite/Pro cancellation, native non-Linux/hosted/quality gates | COMPLETE; M4 RELEASE ADMISSION PENDING | Implement full process-group peak memory accounting and enforceable constrained-host admission, then attempt pinned Lite/Pro full-context diagnostics |
 | 2026-09-26T18:59:47Z | Codex `/root` | Export agent-transition context | Starting clean tree at `9e0384b`; document conversation priorities, implemented boundaries, next task, source map, and historical verification without application changes | HANDOFF.md, README.md, CHECKPOINT.md | passed: clean-tree inspection; not run: handoff documentation checks pending | IN PROGRESS | Validate links and checkpoint consistency; leave M4 active |
 | 2026-09-26T19:01:56Z | Codex `/root` | Complete agent-transition export | Added resumption guide and conversation context; linked README and checkpoint; preserved M4 scope and all historical activity; resolves 18:59 entry | HANDOFF.md, README.md, CHECKPOINT.md | passed: documentation checker, diff check, manual scope/source-map review; not run: application tests (documentation only), commit/push | COMPLETE; M4 RELEASE ADMISSION PENDING | New agent reads handoff and required documents, inspects Git status, then resumes the canonical M4 task |
+| 2026-09-28T00:45:40Z | Antigravity | Cancellable model and runtime hash loops | Add cooperative cancellation to asset verification and installed runtime inventory hashing across core and CLI probe paths; chunk-level cancellation checks, tests, docs, and ADR-024 | crates/dociler-core/src/assets.rs, crates/dociler-core/src/downloads.rs, crates/dociler-core/src/runtime_install.rs, crates/dociler-core/src/runtime_probe.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, docs/decisions.md, docs/models-and-runtime.md, docs/testing-and-release.md, CHECKPOINT.md | passed: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --all-targets --locked` (99 tests passed), `python3 scripts/check_docs.py`, `git diff --check`; not run: real GGUF opt-in test, non-Linux native platforms, full-context quality gates | COMPLETE; M4 CANCELLABLE HASHING ACTIVE | Design and implement full process-group peak memory accounting and enforceable constrained-host admission policy |
