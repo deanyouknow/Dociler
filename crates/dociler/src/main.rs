@@ -1664,6 +1664,13 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
 
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(first) = args.first() {
+        if first == "__worker-extract" {
+            let code = dociler_core::extractor::run_worker_extract_cli(&args[1..]);
+            return ExitCode::from(code as u8);
+        }
+    }
+
     let Some(command) = parse(&args) else {
         // Do not echo arbitrary arguments: they may contain credentials or controls.
         let _ = writeln!(

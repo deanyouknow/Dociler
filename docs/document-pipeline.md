@@ -14,20 +14,25 @@
 
 ## Extraction boundary
 
-Wrap Extractous behind a narrow, versioned interface. Never expose its types to
-the rest of the application. Each parse runs in a new worker process with:
+Isolate binary and office document extraction behind a Dociler-owned parser
+interface (`dociler_core::extractor`). Each parse runs in an out-of-process
+worker (`dociler __worker-extract`) with:
 
 - read access only to the selected file;
-- no network;
-- a maximum input size, elapsed time, resident memory, decompressed expansion,
-  extracted text, and metadata count;
-- stdout reserved for a framed, versioned result protocol;
-- stderr captured, sanitized, and bounded;
-- forced termination on timeout, cancellation, or parent exit.
+- no network and an empty environment (`env_clear`);
+- an isolated Unix process group (`process_group(0)`);
+- maximum input size (50 MiB), elapsed timeout (15s), resident memory monitoring
+  (256 MiB ceiling on Linux via `/proc/<pid>/status`), decompressed expansion
+  (100 MiB), extracted text (10 MiB), and metadata count (100);
+- stdout reserved for a framed, versioned result protocol (`DOCILER_EXTRACT_V1`);
+- stderr captured, sanitized, and bounded (8 KiB);
+- forced termination on timeout, cancellation token, memory ceiling breach, or
+  parent exit.
 
 Validate extension, MIME signature, canonical path, and workspace permission
 before launching the worker. Do not accept an archive's claimed file type at
-face value.
+face value. Direct-editable formats (`.md`, `.txt`) can be parsed natively or
+via the worker boundary.
 
 ## Canonical document model
 

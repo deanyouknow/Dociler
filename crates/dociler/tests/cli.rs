@@ -759,3 +759,56 @@ fn files_command_discovers_workspace_documents_and_respects_filters() {
     let invalid_output = workspace.run(&["files", "nonexistent_dir"]);
     assert_eq!(invalid_output.status.code(), Some(1));
 }
+
+#[test]
+fn worker_extract_subcommand_hidden_from_help() {
+    let workspace = Workspace::new();
+    let help_output = workspace.run(&["--help"]);
+    assert_eq!(help_output.status.code(), Some(0));
+    let stdout = String::from_utf8(help_output.stdout).unwrap();
+    assert!(!stdout.contains("__worker-extract"));
+}
+
+#[test]
+fn worker_extract_subcommand_plain_text_and_rtf() {
+    let workspace = Workspace::new();
+
+    // 1. Plain text extraction via worker
+    let txt_path = workspace.0.join("sample.txt");
+    fs::write(&txt_path, "Paragraph 1\n\nParagraph 2").unwrap();
+
+    let output = workspace.run(&["__worker-extract", txt_path.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("DOCILER_EXTRACT_V1\n"));
+    assert!(stdout.contains("\"format\":\"PlainText\""));
+    assert!(stdout.contains("Paragraph 1"));
+    assert!(stdout.contains("Paragraph 2"));
+
+    // 2. RTF extraction via worker
+    let rtf_path = workspace.0.join("sample.rtf");
+    let rtf_bytes =
+        br#"{\rtf1\ansi\deff0 {\fonttbl{\f0 Arial;}} \b Bold Title\b0\par Regular body text.\par}"#;
+    fs::write(&rtf_path, rtf_bytes).unwrap();
+
+    let rtf_output = workspace.run(&["__worker-extract", rtf_path.to_str().unwrap()]);
+    assert_eq!(rtf_output.status.code(), Some(0));
+    let rtf_stdout = String::from_utf8(rtf_output.stdout).unwrap();
+    assert!(rtf_stdout.starts_with("DOCILER_EXTRACT_V1\n"));
+    assert!(rtf_stdout.contains("\"format\":\"Rtf\""));
+    assert!(rtf_stdout.contains("Bold Title"));
+    assert!(rtf_stdout.contains("Regular body text"));
+
+    // 3. Sandboxed extraction API end-to-end using compiled dociler binary
+    let limits = dociler_core::extractor::ExtractionLimits {
+        worker_executable: Some(PathBuf::from(env!("CARGO_BIN_EXE_dociler"))),
+        ..Default::default()
+    };
+    let doc = dociler_core::extractor::extract_document(&rtf_path, &limits, None)
+        .expect("sandboxed extraction of RTF");
+    assert_eq!(doc.blocks.len(), 2);
+    assert_eq!(
+        doc.source.format,
+        dociler_core::document::DocumentFormat::Rtf
+    );
+}
