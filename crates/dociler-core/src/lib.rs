@@ -12,6 +12,8 @@ pub mod credentials;
 pub mod diagnostics;
 pub mod document;
 pub mod downloads;
+pub mod editing;
+pub mod export;
 pub mod extractor;
 pub mod hardware;
 pub mod indexing;

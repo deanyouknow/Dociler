@@ -569,3 +569,28 @@ destructive operations.
 **Why:** Documents are untrusted external inputs that must be demarcated so they cannot hijack system instructions or prompt injection vectors. Factual Q&A requires that models attribute assertions to verifiable source chunks. Detecting invented source IDs at the host boundary prevents hallucinated references from being presented to users as authentic evidence while giving automated test suites exact accuracy and citation validity metrics.
 
 **Rejected:** Allowing document text outside explicit untrusted delimiters; allowing user or document content to override core grounding policy; silently stripping or mapping hallucinated citations to random real chunks; sending unmetered document content that breaches the context window.
+
+## ADR-034: In-place document editing with session undo and canonical AST multi-format export pipeline
+
+**Decision:** Implement safe in-place document editing and canonical AST multi-format document exporting in `crates/dociler-core/src/editing.rs` and `crates/dociler-core/src/export.rs`:
+1. **In-Place Direct Editing Restrictions:**
+   - In-place mutation is strictly restricted to Markdown (`.md`) and PlainText (`.txt`) files.
+   - Any attempt to overwrite binary or legacy formats (PDF, DOC, DOCX, RTF, ODT) in-place is hard-rejected (`EditError::BinaryOverwriteDenied`).
+   - Every edit requires an active workspace write grant (`WritePolicy::ConfirmEveryWrite`) and explicit user confirmation (`confirmed == true`). Read-only workspaces are rejected with `PermissionDenied`.
+   - Edits enforce workspace containment (`canonical_containment`), rejecting path traversal and escaping symlinks.
+2. **Diff Preview and Atomic Replacement:**
+   - Generate unified diff previews (`DiffPreview`) tracking additions, removals, and unchanged lines before application.
+   - File replacement is atomic: content is written to a temporary file in the same parent directory (`.tmp.<name>.<timestamp>`) with private permissions (`0o600` on Unix), flushed and synced with `sync_all()`, and atomically renamed over the target path.
+3. **Session-Scoped In-Memory Undo:**
+   - Store pre-edit bytes in a memory-only stack (`SessionUndoStack`).
+   - Reverting an edit (`undo_edit`) restores previous bytes via the same atomic temporary file mechanism and pops the record.
+   - Undo state is entirely ephemeral and dropped on process exit, leaving zero disk artifacts.
+4. **Canonical AST Multi-Format Export:**
+   - Support new exports (`ExportFormat`) to Markdown (`.md`), PlainText (`.txt`), Word Document (`.docx`), Rich Text Format (`.rtf`), and OpenDocument Text (`.odt`).
+   - Pure-Rust implementations: RTF is rendered with font/color tables, heading styles, and paragraph formatting; DOCX is packaged as a compliant OpenXML ZIP container (`[Content_Types].xml`, `_rels/.rels`, `docProps/core.xml`, `word/document.xml`); ODT is packaged as a compliant OpenDocument ZIP container with uncompressed `mimetype`, `META-INF/manifest.xml`, `meta.xml`, and `content.xml`.
+   - Overwrite protection: Refuse to overwrite existing original binary source documents (`ExportError::BinarySourceOverwriteDenied`).
+   - Unsupported elements (such as `Block::Unsupported`) are flattened to human-readable comments/placeholders and disclosed in export report warnings.
+
+**Why:** Workspace files belong to the user and must be safeguarded against accidental corruption, unprompted overwrites, or data loss. Direct binary modification of complex formats (.docx, .pdf, .odt) easily leads to document corruption; restricting in-place edits to text-based formats with diff previews and atomic replacement ensures file integrity. In-memory session undo allows quick recovery during interactive chat without persisting user draft history to disk. Providing compliant DOCX, RTF, and ODT exports allows users to generate structured documents from canonical AST representations without requiring external office suites or runtime dependencies.
+
+**Rejected:** In-place modification of binary or legacy office documents; disk-persisted undo logs or backup files; non-atomic file truncation or writing directly to target paths; allowing export writes outside the workspace boundary; silent overwriting of original binary sources.
