@@ -711,3 +711,51 @@ fn model_repair_requires_consent_and_dry_runs_without_writes() {
     assert!(stdout.contains("Repair required"));
     assert!(stderr.contains("explicit consent"));
 }
+
+#[test]
+fn files_command_discovers_workspace_documents_and_respects_filters() {
+    let workspace = Workspace::new();
+
+    // 1. Empty workspace
+    let empty_output = workspace.run(&["files"]);
+    assert_eq!(empty_output.status.code(), Some(0));
+    let stdout = String::from_utf8(empty_output.stdout).unwrap();
+    assert!(stdout.contains("Workspace:"));
+    assert!(stdout.contains("No supported documents discovered"));
+
+    // 2. Add supported documents, gitignore, and unsupported files
+    fs::write(workspace.0.join("README.md"), "# Hello Dociler").unwrap();
+    fs::write(workspace.0.join("notes.txt"), "Meeting notes").unwrap();
+    fs::write(workspace.0.join("draft.tmp.md"), "Temporary draft").unwrap();
+    fs::write(workspace.0.join("program.exe"), "binary").unwrap();
+
+    let gitignore = "*.tmp.md\n";
+    fs::write(workspace.0.join(".gitignore"), gitignore).unwrap();
+
+    let docs_dir = workspace.0.join("docs");
+    fs::create_dir(&docs_dir).unwrap();
+    fs::write(docs_dir.join("spec.docx"), "word document").unwrap();
+
+    let output = workspace.run(&["files"]);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Discovered 3 document(s)"));
+    assert!(stdout.contains("README.md (Markdown"));
+    assert!(stdout.contains("[direct-editable]"));
+    assert!(stdout.contains("notes.txt (Plain Text"));
+    assert!(stdout.contains("docs/spec.docx (Word (.docx)"));
+    assert!(!stdout.contains("program.exe"));
+    assert!(!stdout.contains("draft.tmp.md"));
+    assert!(stdout.contains("1 file(s) ignored by .gitignore or exclusions"));
+
+    // 3. Explicit path argument: dociler files docs
+    let sub_output = workspace.run(&["files", "docs"]);
+    assert_eq!(sub_output.status.code(), Some(0));
+    let sub_stdout = String::from_utf8(sub_output.stdout).unwrap();
+    assert!(sub_stdout.contains("Discovered 1 document(s)"));
+    assert!(sub_stdout.contains("spec.docx"));
+
+    // 4. Invalid path argument
+    let invalid_output = workspace.run(&["files", "nonexistent_dir"]);
+    assert_eq!(invalid_output.status.code(), Some(1));
+}

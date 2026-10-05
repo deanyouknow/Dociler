@@ -1,23 +1,12 @@
 # Project Checkpoint
 
-Last updated: 2026-09-28T02:54:00Z
+Last updated: 2026-10-05T02:26:00Z
 
 ## Current status
 
-**Status:** M3 remote text flow plus M4 hardware/preflight, pinned asset/cache
-verification, consent-gated downloads, safe inventoried runtime extraction,
-model-free runtime probing, and a diagnostic-only model-load/tiny-generation
-probe are locally implemented. The load probe passed synthetic fixtures and
-an opt-in 105 MB real-GGUF test with the pinned Linux x86-64 runtime. Scoped
-CLI signal cancellation and Linux server-only peak-RSS diagnostics now exist;
-they do not enforce or prove the full process-group memory gate. Pinned
-Lite/Pro validation, native cross-platform checks, full-context/memory/quality
-qualification, and local chat remain pending.
+**Status:** M3 remote text flow, M4 hardware preflight/downloads/installed runtime/model load probe, and M5 document processing foundation (canonical AST, format detection, native plain text and markdown parsers, gitignore-aware workspace document discovery, path containment, and `dociler files`/`/files` commands) are locally implemented. The diagnostic model load probe passed synthetic fixtures and opt-in real SmolLM2 tests with memory ceiling abort and cancellation on Linux. Local model chat remains strictly disabled until full-context memory, process-group peak RSS, and model quality gates pass.
 
-**Active milestone:** M4 — Hardware admission, verified local asset management,
-and runtime integration (inventory/preflight, manifest/cache verification,
-download/publication, safe extraction, model-free probe, and a diagnostic
-model-load controller complete locally; real-model and release admission pending).
+**Active milestone:** M5 — Document processing foundation (canonical AST, format validation, native parsers, safe workspace discovery, and CLI/TUI browsing complete locally; Extractous worker process isolation, in-memory BM25 chunk index, and context strategies pending).
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
 `dociler` executable with help, version, workspace/platform diagnostics, config
@@ -287,6 +276,7 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
   cleanly to `ModelProbeError::Cancelled`, ensuring cancellation during version checking
   or server checks is returned directly as cancellation rather than an internal runtime error.
   (All 3 opt-in real tests passed in 19.5s; standard suite: 130 passed, 3 ignored).
+- Implemented Milestone M5 document processing foundation: canonical document AST, format signature validation, native Markdown and PlainText parsers, gitignore-aware workspace document discovery, path containment, and CLI/TUI surfaces. Added `crates/dociler-core/src/document.rs` with `DocumentFormat` enum (`.md`, `.txt`, `.pdf`, `.docx`, `.doc`, `.rtf`, `.odt`), format capability flags (`is_direct_editable`, `supports_export`, `is_legacy_input_only`), magic-byte sniffing (`%PDF-`, `{\rtf`, OLE compound header, ZIP archive container), byte-level signature/encoding validation, and canonical AST structures (`Document`, `DocumentMetadata`, `DocumentSource`, `SourceAnchor`, `Block`, `ListItem`, `InlineRun`). Implemented native in-process parsers `parse_plain_text` and `parse_markdown` with line-range source anchors. Implemented safe workspace document discovery in `crates/dociler-core/src/workspace.rs` with recursive traversal, nested `.gitignore` parsing with negation pattern support (`!pattern`), default build/vendor/cache exclusions (`.git`, `target`, `node_modules`, `dist`, `build`, `.cache`, `vendor`, `.gemini`, `models`), symlink safety (refusing directory symlinks, enforcing canonical path containment on file symlinks to prevent escapes), and per-file (50 MiB) / aggregate (250 MiB) size limits. Added `dociler files [PATH]` command and wired TUI `/files` command to browse discovered workspace documents and formats without loading file contents into memory. Added ADR-030, updated document pipeline and CLI UX documentation, and added comprehensive unit and integration tests. (Standard workspace suite: 144 passed, 3 ignored; PTY integration passed).
 
 ## Work in progress
 
@@ -294,9 +284,7 @@ None.
 
 ## Next recommended task
 
-Begin Milestone M5: isolated document extraction, canonical document AST, format
-detection, and workspace document discovery. Keep local chat disabled until
-full-context memory and model-quality gates pass. Implementation remains authorized.
+Proceed to Extractous worker process isolation and sandboxed binary document extraction (DOCX, PDF, RTF, ODT, DOC) with resource limits. Keep local chat disabled until full-context memory and model-quality gates pass.
 
 ## Blockers
 
@@ -1028,3 +1016,4 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-28T02:29:00Z | Antigravity | Compiled per-target runtime inventory and CPU-instruction release admission gate | Compile expected binaries/libraries and required/recommended CPU instructions into RuntimeAsset, enforce instruction compatibility in preflight/probes, and validate compiled inventory in runtime installation | crates/dociler-core/src/assets.rs, crates/dociler-core/src/hardware.rs, crates/dociler-core/src/runtime_install.rs, crates/dociler-core/src/runtime_probe.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, crates/dociler/src/tui.rs, crates/dociler/tests/cli.rs, scripts/test_tui_pty.py, docs/decisions.md, docs/models-and-runtime.md, CHECKPOINT.md | passed: cargo fmt --check, clippy -D warnings, 126 workspace tests (1 ignored), test_tui_pty.py, check_docs.py, git diff --check | COMPLETE; M4 RUNTIME INVENTORY & CPU GATE ACTIVE | Attempt real Lite/Pro diagnostics with memory limits and verify signal cancellation during long-running pinned loads |
 | 2026-10-05T00:43:00Z | Antigravity | CLI model load-probe experimental and memory ceiling flags, opt-in real GGUF ceiling/cancellation tests, and CLI signal verification | Add --experimental and --ceiling-bytes to CLI model load-probe, enforce options during probing, add real GGUF opt-in ceiling and cancellation tests, add CLI integration tests, docs | crates/dociler/src/main.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/tests/cli.rs, docs/cli-ux.md, docs/decisions.md, docs/models-and-runtime.md, docs/testing-and-release.md, CHECKPOINT.md | passed: cargo fmt --check, clippy -D warnings, 130 workspace tests (3 ignored), test_tui_pty.py, check_docs.py, git diff --check | COMPLETE | Attempt real Lite/Pro diagnostics with memory limits and verify signal cancellation during long-running pinned loads |
 | 2026-10-05T01:54:00Z | Antigravity | Opt-in real GGUF SmolLM2 test suite execution and RuntimeProbeError cancellation mapping | Implement From<RuntimeProbeError> for ModelProbeError, run all 3 opt-in real SmolLM2 tests in /tmp against pinned runtime and GGUF, verify ceiling breach and cancellation | crates/dociler-core/src/model_probe.rs, docs/testing-and-release.md, CHECKPOINT.md | passed: 3 opt-in real SmolLM2 tests (load/gen, ceiling breach, cancel), 130 workspace tests, clippy, fmt, PTY, check_docs, git diff | COMPLETE | Proceed to Milestone M5 document processing foundation |
+| 2026-10-05T02:08:00Z | Antigravity | Complete M5 document foundation: canonical document AST, format detection, and safe workspace discovery | Added Document AST (Document, Block, InlineRun, SourceAnchor), format detection for supported types, native MD/TXT parsers, and gitignore/sandbox-aware workspace document discovery with path containment | crates/dociler-core/src/document.rs, crates/dociler-core/src/workspace.rs, crates/dociler-core/src/lib.rs, crates/dociler/src/main.rs, crates/dociler/src/tui.rs, crates/dociler/tests/cli.rs, docs/decisions.md, docs/document-pipeline.md, docs/cli-ux.md, CHECKPOINT.md | passed: cargo fmt --all -- --check, cargo clippy --workspace --all-targets --locked -- -D warnings, cargo test --workspace --all-targets --locked (144 passed, 3 ignored), python3 scripts/test_tui_pty.py target/debug/dociler, python3 scripts/check_docs.py, git diff --check; not run: non-Linux platforms, hosted CI, live remote providers | COMPLETE; M5 DOCUMENT FOUNDATION ACTIVE | Implement sandboxed Extractous worker process isolation with memory/decompression limits for binary document extraction |

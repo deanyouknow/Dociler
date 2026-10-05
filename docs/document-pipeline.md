@@ -53,15 +53,23 @@ embedded scripts/macros, external resources, and executable content are ignored.
 
 ## Workspace discovery
 
-- Start from the canonical current working directory.
-- Respect Git ignore rules when present.
-- Exclude `.git`, hidden directories, dependency/build/vendor directories, model
+- Start from the canonical current working directory or an explicit path passed
+  to `dociler files [PATH]` or `/files`.
+- Respect Git ignore rules when present, evaluating nested `.gitignore` files
+  and handling negation patterns (`!pattern`).
+- Exclude `.git`, hidden directories, dependency/build/vendor directories (`target`,
+  `node_modules`, `dist`, `build`, `.cache`, `vendor`, `.gemini`), model
   caches, and Dociler output/cache names by default.
 - Do not follow directory symlinks. A selected file symlink is accepted only if
-  its resolved target remains inside the workspace.
-- Inspect only supported extensions during the initial metadata scan.
+  its resolved target remains strictly inside the workspace boundary.
+- Inspect only supported extensions during the initial metadata scan (`.md`,
+  `.txt`, `.pdf`, `.docx`, `.doc`, `.rtf`, `.odt`).
+- Enforce size limits during scanning: individual files exceeding 50 MiB are
+  skipped and reported in discovery summary; total document aggregate bytes
+  exceeding 250 MiB abort with `TotalSizeLimitExceeded`.
 - Read document contents only when explicitly selected or required by a user
-  question.
+  question; scanning and listing documents never loads body text or indexes
+  chunks into memory.
 
 ## Chunking and indexing
 

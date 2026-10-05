@@ -858,7 +858,42 @@ impl App {
                 self.notice("Repeat /clear to erase this in-memory conversation.");
             }
             "/exit" => self.quit = true,
-            "/files" | "/permissions" | "/export" | "/turn-on-remote"
+            "/files" => match self.workspace.discover_documents() {
+                Ok(report) => {
+                    if report.documents.is_empty() {
+                        self.notice(format!(
+                            "No supported documents found in workspace ({}).",
+                            self.workspace.root().display()
+                        ));
+                    } else {
+                        let mut lines = Vec::new();
+                        lines.push(format!(
+                            "Workspace documents in {} ({} files, {}):",
+                            self.workspace.root().display(),
+                            report.documents.len(),
+                            format_bytes(report.total_document_bytes)
+                        ));
+                        for doc in &report.documents {
+                            lines.push(format!(
+                                "  {} ({}, {}){}",
+                                doc.relative_path.display(),
+                                doc.format,
+                                format_bytes(doc.byte_size),
+                                if doc.is_direct_editable() {
+                                    " [direct-editable]"
+                                } else {
+                                    ""
+                                }
+                            ));
+                        }
+                        self.notice(lines.join("\n"));
+                    }
+                }
+                Err(err) => {
+                    self.error(format!("Failed to discover documents: {err}"));
+                }
+            },
+            "/permissions" | "/export" | "/turn-on-remote"
             | "/turn-off-remote" | "/update" => self.error(
                 "That command is planned but unavailable in this text-only milestone.",
             ),
@@ -2019,11 +2054,39 @@ mod tests {
         command(&mut app, "hello");
         assert_eq!(app.activity, Activity::Ready);
         assert!(app.generation.is_none());
-        command(&mut app, "/files");
+        command(&mut app, "/permissions");
         assert!(matches!(
             app.transcript.last().unwrap().kind,
             EntryKind::Error
         ));
+    }
+
+    #[test]
+    fn files_command_lists_workspace_documents_or_shows_empty_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::open(dir.path()).unwrap();
+        let paths = test_paths(&dir);
+        let mut app = App::new(workspace, paths, Vec::new(), None);
+        app.cancel_onboarding();
+
+        // Empty workspace
+        command(&mut app, "/files");
+        assert_eq!(app.activity, Activity::Ready);
+        let last = app.transcript.last().unwrap();
+        assert!(matches!(last.kind, EntryKind::Notice));
+        assert!(
+            last.text
+                .contains("No supported documents found in workspace")
+        );
+
+        // With supported document
+        std::fs::write(dir.path().join("overview.md"), "# Overview\nDociler").unwrap();
+        command(&mut app, "/files");
+        let last = app.transcript.last().unwrap();
+        assert!(matches!(last.kind, EntryKind::Notice));
+        assert!(last.text.contains("overview.md"));
+        assert!(last.text.contains("Markdown"));
+        assert!(last.text.contains("[direct-editable]"));
     }
 
     #[test]

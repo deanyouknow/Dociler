@@ -35,7 +35,7 @@ use dociler_core::runtime_probe::{
     RuntimeProbeError, RuntimeProbeOptions, probe_installed_runtime,
 };
 use dociler_core::session::{Role, Session};
-use dociler_core::workspace::{Workspace, WritePolicy};
+use dociler_core::workspace::{DiscoveryError, Workspace, WritePolicy};
 
 mod cli_signals;
 mod tui;
@@ -47,6 +47,7 @@ Usage: dociler [COMMAND]
 Commands:
   chat [NAME]   Open interactive terminal chat; optionally choose a profile
   doctor        Show basic workspace and platform diagnostics
+  files [PATH]  List supported documents discovered in the workspace (no writes)
   config paths  Show OS config/model/runtime/cache locations (no writes)
   config show   Validate settings and show current-workspace policy (no writes)
   config init   Create safe default settings; never overwrite an existing file
@@ -165,6 +166,9 @@ enum Command {
     Chat {
         name: Option<String>,
     },
+    Files {
+        path: Option<std::path::PathBuf>,
+    },
 }
 
 fn parse(args: &[OsString]) -> Option<Command> {
@@ -173,8 +177,17 @@ fn parse(args: &[OsString]) -> Option<Command> {
         [arg] if arg == "help" || arg == "--help" || arg == "-h" => Some(Command::Help),
         [arg] if arg == "--version" || arg == "-V" => Some(Command::Version),
         [arg] if arg == "doctor" => Some(Command::Doctor),
+        [command] if command == "files" => Some(Command::Files { path: None }),
+        [command, path] if command == "files" && path != "--help" && path != "-h" => {
+            Some(Command::Files {
+                path: Some(std::path::PathBuf::from(path)),
+            })
+        }
         [command, flag]
-            if (command == "doctor" || command == "config" || command == "model")
+            if (command == "doctor"
+                || command == "config"
+                || command == "model"
+                || command == "files")
                 && (flag == "--help" || flag == "-h") =>
         {
             Some(Command::Help)
@@ -416,6 +429,7 @@ fn parse_model_remove_target(value: &OsString) -> Option<ModelRemoveTarget> {
 enum CommandError {
     Output(io::Error),
     Workspace,
+    Discovery(DiscoveryError),
     Config(io::ErrorKind),
     Credential(CredentialError),
     Input,
@@ -436,6 +450,12 @@ enum CommandError {
 impl From<io::Error> for CommandError {
     fn from(error: io::Error) -> Self {
         Self::Output(error)
+    }
+}
+
+impl From<DiscoveryError> for CommandError {
+    fn from(error: DiscoveryError) -> Self {
+        Self::Discovery(error)
     }
 }
 
@@ -874,6 +894,83 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
         }
         Command::Help => write!(output, "{HELP}")?,
         Command::Version => writeln!(output, "dociler {}", env!("CARGO_PKG_VERSION"))?,
+        Command::Files { path } => {
+            let workspace = match path {
+                Some(p) => Workspace::open(&p).map_err(|err| {
+                    let _ = writeln!(
+                        io::stderr().lock(),
+                        "Failed to open workspace at '{}': {err}",
+                        p.display()
+                    );
+                    CommandError::Workspace
+                })?,
+                None => workspace()?,
+            };
+
+            let report = workspace
+                .discover_documents()
+                .map_err(CommandError::Discovery)?;
+
+            writeln!(output, "Workspace: {}", workspace.root().display())?;
+
+            if report.documents.is_empty() {
+                writeln!(
+                    output,
+                    "No supported documents discovered (Markdown, Plain Text, PDF, DOCX, DOC, RTF, ODT)."
+                )?;
+            } else {
+                writeln!(
+                    output,
+                    "Discovered {} document(s) ({}):",
+                    report.documents.len(),
+                    format_cli_bytes(report.total_document_bytes)
+                )?;
+                writeln!(output)?;
+                for doc in &report.documents {
+                    writeln!(
+                        output,
+                        "  {} ({}, {}){}",
+                        doc.relative_path.display(),
+                        doc.format,
+                        format_cli_bytes(doc.byte_size),
+                        if doc.is_direct_editable() {
+                            " [direct-editable]"
+                        } else {
+                            ""
+                        }
+                    )?;
+                }
+            }
+
+            if report.ignored_files_count > 0
+                || report.skipped_symlinks_count > 0
+                || report.skipped_oversized_count > 0
+            {
+                writeln!(output)?;
+                writeln!(output, "Discovery filters:")?;
+                if report.ignored_files_count > 0 {
+                    writeln!(
+                        output,
+                        "  {} file(s) ignored by .gitignore or exclusions",
+                        report.ignored_files_count
+                    )?;
+                }
+                if report.skipped_symlinks_count > 0 {
+                    writeln!(
+                        output,
+                        "  {} symlink(s) skipped (directory or escaping target)",
+                        report.skipped_symlinks_count
+                    )?;
+                }
+                if report.skipped_oversized_count > 0 {
+                    writeln!(
+                        output,
+                        "  {} oversized document(s) skipped (> 50 MiB)",
+                        report.skipped_oversized_count
+                    )?;
+                }
+            }
+        }
         Command::ConfigPaths => {
             let paths = paths()?;
             writeln!(output, "Config file: {:?}", paths.config_file())?;
@@ -1833,6 +1930,18 @@ fn main() -> ExitCode {
                     RemoteError::Cancelled => "remote response was cancelled.",
                     RemoteError::Output => "output failed while streaming the remote response.",
                 },
+                CommandError::Discovery(ref error) => match error {
+                    DiscoveryError::Io(_) => "failed to read workspace files or directories.",
+                    DiscoveryError::TotalSizeLimitExceeded { .. } => {
+                        "discovered workspace documents exceeded the total size limit (250 MiB)."
+                    }
+                    DiscoveryError::FileLimitExceeded { .. } => {
+                        "discovered workspace documents exceeded the maximum file count limit (10,000 files)."
+                    }
+                    DiscoveryError::PathEscape { .. } => {
+                        "a symlink attempted to escape the workspace boundary; operation aborted."
+                    }
+                },
                 CommandError::Terminal => {
                     "interactive terminal setup or event handling failed; terminal state was restored."
                 }
@@ -1841,5 +1950,17 @@ fn main() -> ExitCode {
             let _ = writeln!(io::stderr().lock(), "dociler: {message}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn format_cli_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.2} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} bytes")
     }
 }

@@ -9,6 +9,7 @@ pub mod chat;
 pub mod config;
 pub mod credentials;
 pub mod diagnostics;
+pub mod document;
 pub mod downloads;
 pub mod hardware;
 pub mod model_probe;

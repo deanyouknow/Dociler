@@ -165,16 +165,18 @@ the selected set and estimated processing work.
 | `/update` | Check signed metadata and install only after confirmation. |
 | `/exit` | Exit, asking what to do with a running LAN service. |
 
-`/help`, `/status`, `/model [list|status|info PROFILE|use PROFILE|unload|remove TARGET|repair PROFILE]`,
+`/help`, `/status`, `/files`, `/model [list|status|info PROFILE|use PROFILE|unload|remove TARGET|repair PROFILE]`,
 `/connect [NAME|add|refresh|check NAME|edit NAME|remove NAME|key NAME]`,
-confirmed `/clear`, and `/exit` are active in the terminal surface. Selecting a
+confirmed `/clear`, and `/exit` are active in the terminal surface. `/files`
+discovers and lists supported workspace documents, formats, sizes, and direct-editing
+capabilities without loading full content into memory. Selecting a
 local profile (`/model use PROFILE`) sets the active target to Local in
 diagnostic mode; conversation context is reset, and prompts return actionable
 notices explaining that local chat remains disabled pending release qualification
 gates. In-TUI cache mutations (`/model remove` and `/model repair`) require exact
 command repetition following a dry-run preview before executing.
 
-`dociler model status`, `model list`, and `model verify [PROFILE]` are available
+`dociler files [PATH]`, `dociler model status`, `model list`, and `model verify [PROFILE]` are available
 outside the TUI, as is the explicitly confirmed `model download PROFILE --confirm [--restart]`,
 `model remove TARGET --confirm`, `model repair PROFILE --confirm`,
 `model runtime-install --confirm`, `model runtime-probe --confirm`, and diagnostic-only
