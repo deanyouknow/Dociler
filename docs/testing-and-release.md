@@ -233,7 +233,8 @@ checks the exact alias/path/build/auth contract, makes one bounded generation
 request, and reaps the child. It is a protocol fixture only, never a Dociler
 Lite/Pro profile or quality substitute. Do not commit the GGUF or runtime.
 
-The pinned Linux x86-64 runtime passed this opt-in test on 2026-09-23. Real
+The pinned Linux x86-64 runtime passed these opt-in tests (load/generation,
+memory ceiling breach abort, and loading cancellation) on 2026-10-05. Real
 pinned Lite/Pro loads, process-group peak RSS, 8K/16K contexts, CPU/GPU target
 matrix, signal cancellation, model quality, and local chat remain unverified
 release gates.

@@ -92,6 +92,15 @@ impl fmt::Display for ModelProbeError {
 
 impl std::error::Error for ModelProbeError {}
 
+impl From<RuntimeProbeError> for ModelProbeError {
+    fn from(error: RuntimeProbeError) -> Self {
+        match error {
+            RuntimeProbeError::Cancelled => Self::Cancelled,
+            other => Self::Runtime(other),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelProbeOptions {
     pub confirmed: bool,
@@ -302,16 +311,15 @@ where
         .map_err(|error| ModelProbeError::Runtime(RuntimeProbeError::Io(error.kind())))?;
     fs::create_dir(probe_dir.path().join("cache"))
         .map_err(|error| ModelProbeError::Runtime(RuntimeProbeError::Io(error.kind())))?;
-    let key = make_key().map_err(ModelProbeError::Runtime)?;
+    let key = make_key()?;
     let key_file = probe_dir.path().join("internal-api-key");
-    write_private_key(&key_file, &key).map_err(ModelProbeError::Runtime)?;
+    write_private_key(&key_file, &key)?;
     check_version(
         target.executable,
         target.install_directory,
         &probe_dir,
         cancellation,
-    )
-    .map_err(ModelProbeError::Runtime)?;
+    )?;
     if cancellation.is_cancelled() {
         return Err(ModelProbeError::Cancelled);
     }
@@ -384,7 +392,7 @@ where
     let memory_report = memory.finish();
     let stopped = child.stop();
     let diagnostics = capture.finish();
-    stopped.map_err(ModelProbeError::Runtime)?;
+    stopped?;
     if let Some(abort) = abort_info {
         return Err(ModelProbeError::MemoryLimitExceeded {
             limit_bytes: abort.limit_bytes,
@@ -445,9 +453,7 @@ fn check_loaded_server(
         if start.elapsed() >= load_timeout {
             return Err(ModelProbeError::TimedOut);
         }
-        match fetch_json(&client, &format!("{base}/health"), None)
-            .map_err(ModelProbeError::Runtime)?
-        {
+        match fetch_json(&client, &format!("{base}/health"), None)? {
             Some((200, value)) if value["status"] == "ok" => break,
             Some((503, _)) | None => {}
             _ => return Err(ModelProbeError::Runtime(RuntimeProbeError::InvalidResponse)),
@@ -459,16 +465,14 @@ fn check_loaded_server(
     }
     let startup_ms = start.elapsed().as_millis();
     if !matches!(
-        fetch_json(&client, &format!("{base}/v1/models"), None)
-            .map_err(ModelProbeError::Runtime)?,
+        fetch_json(&client, &format!("{base}/v1/models"), None)?,
         Some((401, _))
     ) {
         return Err(ModelProbeError::Runtime(
             RuntimeProbeError::AuthenticationFailed,
         ));
     }
-    let models = fetch_json(&client, &format!("{base}/v1/models"), Some(endpoint.key))
-        .map_err(ModelProbeError::Runtime)?
+    let models = fetch_json(&client, &format!("{base}/v1/models"), Some(endpoint.key))?
         .ok_or(ModelProbeError::ModelIdentity)?;
     let data = models.1["data"]
         .as_array()
@@ -476,8 +480,7 @@ fn check_loaded_server(
     if models.0 != 200 || data.len() != 1 || data[0]["id"] != profile.alias() {
         return Err(ModelProbeError::ModelIdentity);
     }
-    let props = fetch_json(&client, &format!("{base}/props"), Some(endpoint.key))
-        .map_err(ModelProbeError::Runtime)?
+    let props = fetch_json(&client, &format!("{base}/props"), Some(endpoint.key))?
         .ok_or(ModelProbeError::ModelIdentity)?;
     let expected_path = model_path.to_str().ok_or(ModelProbeError::ModelIdentity)?;
     let build = props.1["build_info"].as_str().unwrap_or("");

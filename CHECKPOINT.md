@@ -279,6 +279,14 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
   arbitrary flag ordering, and correct execution dispatch. Added ADR-029 and updated
   `docs/cli-ux.md`, `docs/decisions.md`, `docs/models-and-runtime.md`, and `docs/testing-and-release.md`.
   (Total suite: 130 passed, 3 ignored; PTY integration passed).
+- Verified all three opt-in real SmolLM2 integration tests (`real_smollm2_fixture_loads_and_generates`,
+  `real_smollm2_fixture_aborts_on_memory_ceiling_breach`, and
+  `real_smollm2_fixture_loading_cancellation_stops_server`) end-to-end against the
+  pinned `b10809` Linux runtime and a 105 MB GGUF in isolated `/tmp` state.
+  Implemented `From<RuntimeProbeError> for ModelProbeError` mapping `RuntimeProbeError::Cancelled`
+  cleanly to `ModelProbeError::Cancelled`, ensuring cancellation during version checking
+  or server checks is returned directly as cancellation rather than an internal runtime error.
+  (All 3 opt-in real tests passed in 19.5s; standard suite: 130 passed, 3 ignored).
 
 ## Work in progress
 
@@ -286,11 +294,9 @@ None.
 
 ## Next recommended task
 
-Continue M4 by verifying signal cancellation during an actual long-running pinned
-Lite/Pro load or attempting real Lite/Pro diagnostics under process-group memory limits.
-Then repeat native signal/model checks on macOS/Windows/Linux ARM64 with pinned runtimes.
-Keep local chat disabled until full-context memory and model-quality gates pass.
-Implementation remains authorized.
+Begin Milestone M5: isolated document extraction, canonical document AST, format
+detection, and workspace document discovery. Keep local chat disabled until
+full-context memory and model-quality gates pass. Implementation remains authorized.
 
 ## Blockers
 
@@ -425,8 +431,11 @@ repository or shell startup files. Use the normal rustup setup described in
   - `remote`: 5 passed.
 - **passed:** `python3 scripts/test_tui_pty.py target/debug/dociler` (PTY onboarding, health check, multi-turn chat, cancellation, resize, and cleanup).
 - **passed:** `python3 scripts/check_docs.py` (17 Markdown files, 67 relative links, README coverage).
-- **passed:** `git diff --check` (no whitespace or newline errors).
-- **not run:** opt-in real GGUF SmolLM2 test suite, full-context 8K/16K workloads, native non-Linux platforms.
+- **passed:** `DOCILER_REAL_GGUF_TEST_ROOT=/tmp/dociler-real-gguf-test cargo test -p dociler-core real_smollm2 --locked -- --ignored` (3 passed in 19.54s):
+  - `real_smollm2_fixture_loading_cancellation_stops_server`: passed.
+  - `real_smollm2_fixture_loads_and_generates`: passed.
+  - `real_smollm2_fixture_aborts_on_memory_ceiling_breach`: passed.
+- **not run:** full-context 8K/16K workloads, native non-Linux platforms.
 
 ### M4 Compiled per-target runtime inventory and CPU-instruction admission gate — 2026-09-28
 
@@ -1018,3 +1027,4 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-28T02:05:00Z | Antigravity | TUI local profile selection, inspection, removal/repair UI, and /model workflow | Implement /model command in TUI with list, status, info, use, unload, remove, and repair subcommands; local/remote backend switching; tests and docs | crates/dociler/src/tui.rs, docs/cli-ux.md, docs/decisions.md, docs/models-and-runtime.md, CHECKPOINT.md | passed: fmt, clippy -D warnings, 124 workspace tests (1 ignored), test_tui_pty.py, check_docs.py, git diff --check | COMPLETE; M4 TUI LOCAL SELECTION ACTIVE | Verify signal cancellation during long-running Lite/Pro load or implement compiled per-file/CPU-instruction release manifest |
 | 2026-09-28T02:29:00Z | Antigravity | Compiled per-target runtime inventory and CPU-instruction release admission gate | Compile expected binaries/libraries and required/recommended CPU instructions into RuntimeAsset, enforce instruction compatibility in preflight/probes, and validate compiled inventory in runtime installation | crates/dociler-core/src/assets.rs, crates/dociler-core/src/hardware.rs, crates/dociler-core/src/runtime_install.rs, crates/dociler-core/src/runtime_probe.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, crates/dociler/src/tui.rs, crates/dociler/tests/cli.rs, scripts/test_tui_pty.py, docs/decisions.md, docs/models-and-runtime.md, CHECKPOINT.md | passed: cargo fmt --check, clippy -D warnings, 126 workspace tests (1 ignored), test_tui_pty.py, check_docs.py, git diff --check | COMPLETE; M4 RUNTIME INVENTORY & CPU GATE ACTIVE | Attempt real Lite/Pro diagnostics with memory limits and verify signal cancellation during long-running pinned loads |
 | 2026-10-05T00:43:00Z | Antigravity | CLI model load-probe experimental and memory ceiling flags, opt-in real GGUF ceiling/cancellation tests, and CLI signal verification | Add --experimental and --ceiling-bytes to CLI model load-probe, enforce options during probing, add real GGUF opt-in ceiling and cancellation tests, add CLI integration tests, docs | crates/dociler/src/main.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/tests/cli.rs, docs/cli-ux.md, docs/decisions.md, docs/models-and-runtime.md, docs/testing-and-release.md, CHECKPOINT.md | passed: cargo fmt --check, clippy -D warnings, 130 workspace tests (3 ignored), test_tui_pty.py, check_docs.py, git diff --check | COMPLETE | Attempt real Lite/Pro diagnostics with memory limits and verify signal cancellation during long-running pinned loads |
+| 2026-10-05T01:54:00Z | Antigravity | Opt-in real GGUF SmolLM2 test suite execution and RuntimeProbeError cancellation mapping | Implement From<RuntimeProbeError> for ModelProbeError, run all 3 opt-in real SmolLM2 tests in /tmp against pinned runtime and GGUF, verify ceiling breach and cancellation | crates/dociler-core/src/model_probe.rs, docs/testing-and-release.md, CHECKPOINT.md | passed: 3 opt-in real SmolLM2 tests (load/gen, ceiling breach, cancel), 130 workspace tests, clippy, fmt, PTY, check_docs, git diff | COMPLETE | Proceed to Milestone M5 document processing foundation |
