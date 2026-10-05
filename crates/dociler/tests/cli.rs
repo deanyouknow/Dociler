@@ -320,6 +320,140 @@ fn model_load_probe_requires_consent_and_verified_assets() {
 }
 
 #[test]
+fn model_load_probe_supports_experimental_and_ceiling_bytes_flags() {
+    let workspace = Workspace::new();
+
+    // Unconfirmed with --experimental fails with explicit consent error
+    let unconfirmed_exp = workspace.run(&["model", "load-probe", "dociler-lite", "--experimental"]);
+    assert_eq!(unconfirmed_exp.status.code(), Some(1));
+    assert!(
+        String::from_utf8(unconfirmed_exp.stderr)
+            .unwrap()
+            .contains("explicit consent")
+    );
+
+    // Unconfirmed with --ceiling-bytes fails with explicit consent error
+    let unconfirmed_ceil = workspace.run(&[
+        "model",
+        "load-probe",
+        "dociler-lite",
+        "--ceiling-bytes",
+        "4000000000",
+    ]);
+    assert_eq!(unconfirmed_ceil.status.code(), Some(1));
+    assert!(
+        String::from_utf8(unconfirmed_ceil.stderr)
+            .unwrap()
+            .contains("explicit consent")
+    );
+
+    // Invalid ceiling values return exit code 2 (unrecognized command / invalid syntax)
+    for bad_args in [
+        vec![
+            "model",
+            "load-probe",
+            "dociler-lite",
+            "--confirm",
+            "--ceiling-bytes",
+            "0",
+        ],
+        vec![
+            "model",
+            "load-probe",
+            "dociler-lite",
+            "--confirm",
+            "--ceiling-bytes",
+            "not-a-number",
+        ],
+        vec![
+            "model",
+            "load-probe",
+            "dociler-lite",
+            "--confirm",
+            "--ceiling-bytes=0",
+        ],
+        vec![
+            "model",
+            "load-probe",
+            "dociler-lite",
+            "--confirm",
+            "--ceiling-bytes",
+        ],
+        vec![
+            "model",
+            "load-probe",
+            "dociler-lite",
+            "--confirm",
+            "--unknown-flag",
+        ],
+    ] {
+        let bad = workspace.run(&bad_args);
+        assert_eq!(bad.status.code(), Some(2));
+    }
+
+    // Valid flags are recognized; execution proceeds past argument parsing to missing GGUF check (code 1)
+    let valid_exp = workspace.run(&[
+        "model",
+        "load-probe",
+        "dociler-lite",
+        "--confirm",
+        "--experimental",
+    ]);
+    assert_eq!(valid_exp.status.code(), Some(1));
+    assert!(
+        String::from_utf8(valid_exp.stderr)
+            .unwrap()
+            .contains("GGUF is missing")
+    );
+
+    let valid_ceil = workspace.run(&[
+        "model",
+        "load-probe",
+        "dociler-lite",
+        "--confirm",
+        "--ceiling-bytes",
+        "4000000000",
+    ]);
+    assert_eq!(valid_ceil.status.code(), Some(1));
+    assert!(
+        String::from_utf8(valid_ceil.stderr)
+            .unwrap()
+            .contains("GGUF is missing")
+    );
+
+    let valid_inline_ceil = workspace.run(&[
+        "model",
+        "load-probe",
+        "dociler-lite",
+        "--confirm",
+        "--ceiling-bytes=4000000000",
+    ]);
+    assert_eq!(valid_inline_ceil.status.code(), Some(1));
+    assert!(
+        String::from_utf8(valid_inline_ceil.stderr)
+            .unwrap()
+            .contains("GGUF is missing")
+    );
+
+    // Arbitrary flag ordering and aliases (--allow-experimental, --memory-ceiling-bytes)
+    let valid_all = workspace.run(&[
+        "model",
+        "load-probe",
+        "dociler-lite",
+        "--allow-experimental",
+        "--memory-ceiling-bytes=4000000000",
+        "--confirm",
+    ]);
+    assert_eq!(valid_all.status.code(), Some(1));
+    assert!(
+        String::from_utf8(valid_all.stderr)
+            .unwrap()
+            .contains("GGUF is missing")
+    );
+    assert!(!workspace.0.join("data").exists());
+}
+
+#[test]
 fn diagnostics_reject_a_file_as_workspace() {
     let workspace = Workspace::new();
     let file = workspace.0.join("input.txt");

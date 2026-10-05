@@ -178,7 +178,7 @@ command repetition following a dry-run preview before executing.
 outside the TUI, as is the explicitly confirmed `model download PROFILE --confirm [--restart]`,
 `model remove TARGET --confirm`, `model repair PROFILE --confirm`,
 `model runtime-install --confirm`, `model runtime-probe --confirm`, and diagnostic-only
-`model load-probe PROFILE --confirm`; the remaining rows are the approved target contract.
+`model load-probe PROFILE --confirm [--experimental] [--ceiling-bytes BYTES]`; the remaining rows are the approved target contract.
 Both `model download` and `model repair` are wired to scoped signal listeners
 (SIGINT/SIGTERM/Ctrl+C), cooperatively stopping active HTTP body streams and
 preserving partial files for subsequent resumption.

@@ -1111,4 +1111,125 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             report.process_group_peak_rss_bytes.unwrap(),
         );
     }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    #[ignore = "requires the pinned Linux runtime and a separately downloaded 105 MB GGUF fixture"]
+    fn real_smollm2_fixture_aborts_on_memory_ceiling_breach() {
+        let root = std::env::var_os("DOCILER_REAL_GGUF_TEST_ROOT")
+            .expect("set DOCILER_REAL_GGUF_TEST_ROOT to the isolated fixture directory");
+        let root = Path::new(&root);
+        let paths =
+            AppPaths::new(root.join("config"), root.join("data"), root.join("cache")).unwrap();
+        let fixture = AssetSpec::test_fixture(
+            AssetKind::Model,
+            "real-smollm2",
+            "SmolLM2-135M-Instruct-Q4_K_M.gguf",
+            105_454_432,
+            "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d",
+        );
+        verify_model(&paths, fixture, &CancellationToken::new())
+            .expect("real GGUF fixture must pass SHA-256 verification");
+        let runtime = crate::assets::runtime_asset_for("linux", "x86_64").unwrap();
+        let installed = inspect_installed_runtime_cancellable(
+            &paths,
+            *runtime,
+            VerificationLevel::Sha256,
+            None,
+        );
+        assert_eq!(installed.state(), RuntimeInstallState::Verified);
+        let result = run_model_probe(
+            ProbeTarget {
+                executable: installed.server_path(),
+                install_directory: installed.path(),
+                model_path: &fixture.cache_path(&paths),
+                profile: LocalProfile::Lite,
+            },
+            || {
+                verify_model(&paths, fixture, &CancellationToken::new())?;
+                if inspect_installed_runtime_cancellable(
+                    &paths,
+                    *runtime,
+                    VerificationLevel::Sha256,
+                    None,
+                )
+                .state()
+                    != RuntimeInstallState::Verified
+                {
+                    return Err(ModelProbeError::RuntimeInvalid);
+                }
+                Ok(())
+            },
+            Some(1),
+            &CancellationToken::new(),
+            LOAD_TIMEOUT,
+        );
+        match result {
+            Err(ModelProbeError::MemoryLimitExceeded {
+                limit_bytes,
+                observed_bytes,
+            }) => {
+                assert_eq!(limit_bytes, 1);
+                assert!(observed_bytes > 1);
+            }
+            other => panic!("expected MemoryLimitExceeded error, got {other:?}"),
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    #[ignore = "requires the pinned Linux runtime and a separately downloaded 105 MB GGUF fixture"]
+    fn real_smollm2_fixture_loading_cancellation_stops_server() {
+        let root = std::env::var_os("DOCILER_REAL_GGUF_TEST_ROOT")
+            .expect("set DOCILER_REAL_GGUF_TEST_ROOT to the isolated fixture directory");
+        let root = Path::new(&root);
+        let paths =
+            AppPaths::new(root.join("config"), root.join("data"), root.join("cache")).unwrap();
+        let fixture = AssetSpec::test_fixture(
+            AssetKind::Model,
+            "real-smollm2",
+            "SmolLM2-135M-Instruct-Q4_K_M.gguf",
+            105_454_432,
+            "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d",
+        );
+        verify_model(&paths, fixture, &CancellationToken::new())
+            .expect("real GGUF fixture must pass SHA-256 verification");
+        let runtime = crate::assets::runtime_asset_for("linux", "x86_64").unwrap();
+        let installed = inspect_installed_runtime_cancellable(
+            &paths,
+            *runtime,
+            VerificationLevel::Sha256,
+            None,
+        );
+        assert_eq!(installed.state(), RuntimeInstallState::Verified);
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let result = run_model_probe(
+            ProbeTarget {
+                executable: installed.server_path(),
+                install_directory: installed.path(),
+                model_path: &fixture.cache_path(&paths),
+                profile: LocalProfile::Lite,
+            },
+            || {
+                verify_model(&paths, fixture, &cancellation)?;
+                if inspect_installed_runtime_cancellable(
+                    &paths,
+                    *runtime,
+                    VerificationLevel::Sha256,
+                    None,
+                )
+                .state()
+                    != RuntimeInstallState::Verified
+                {
+                    return Err(ModelProbeError::RuntimeInvalid);
+                }
+                Ok(())
+            },
+            None,
+            &cancellation,
+            LOAD_TIMEOUT,
+        );
+        assert_eq!(result, Err(ModelProbeError::Cancelled));
+    }
 }

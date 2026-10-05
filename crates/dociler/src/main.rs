@@ -18,7 +18,9 @@ use dociler_core::downloads::{
 use dociler_core::hardware::{
     AcceleratorCandidate, HardwareInventory, MemoryScope, ModelPreflight, PreflightStatus,
 };
-use dociler_core::model_probe::{ModelProbeError, probe_cached_model};
+use dociler_core::model_probe::{
+    ModelProbeError, ModelProbeOptions, probe_cached_model_with_options,
+};
 use dociler_core::paths::AppPaths;
 use dociler_core::profiles::{
     ProfileInstallError, ProfileMutationError, check_remote_profile, edit_remote_profile,
@@ -62,7 +64,7 @@ Commands:
                 Safely extract and inventory the verified pinned runtime (never execute it)
   model runtime-probe --confirm
                 Reverify, start a model-free loopback runtime, check health/auth/version, then stop it
-  model load-probe PROFILE --confirm
+  model load-probe PROFILE --confirm [--experimental] [--ceiling-bytes BYTES]
                 Reverify a pinned GGUF/runtime, test a small CPU generation, then stop it
   connect list  List saved remote profiles (never credentials)
   connect verify URL MODEL
@@ -126,6 +128,8 @@ enum Command {
     ModelLoadProbe {
         profile: LocalProfile,
         confirmed: bool,
+        allow_experimental: bool,
+        memory_ceiling_bytes: Option<u64>,
     },
     ConnectList,
     ConnectVerify {
@@ -265,18 +269,43 @@ fn parse(args: &[OsString]) -> Option<Command> {
         {
             Some(Command::ModelRuntimeProbe { confirmed: true })
         }
-        [command, action, profile] if command == "model" && action == "load-probe" => {
+        [command, action, profile, rest @ ..] if command == "model" && action == "load-probe" => {
+            let profile = parse_local_profile(profile)?;
+            let mut confirmed = false;
+            let mut allow_experimental = false;
+            let mut memory_ceiling_bytes = None;
+            let mut iter = rest.iter();
+            while let Some(arg) = iter.next() {
+                let s = arg.to_str()?;
+                if s == "--confirm" {
+                    confirmed = true;
+                } else if s == "--experimental" || s == "--allow-experimental" {
+                    allow_experimental = true;
+                } else if s == "--ceiling-bytes" || s == "--memory-ceiling-bytes" {
+                    let val = iter.next()?.to_str()?;
+                    let bytes: u64 = val.parse().ok()?;
+                    if bytes == 0 {
+                        return None;
+                    }
+                    memory_ceiling_bytes = Some(bytes);
+                } else if let Some(val) = s
+                    .strip_prefix("--ceiling-bytes=")
+                    .or_else(|| s.strip_prefix("--memory-ceiling-bytes="))
+                {
+                    let bytes: u64 = val.parse().ok()?;
+                    if bytes == 0 {
+                        return None;
+                    }
+                    memory_ceiling_bytes = Some(bytes);
+                } else {
+                    return None;
+                }
+            }
             Some(Command::ModelLoadProbe {
-                profile: parse_local_profile(profile)?,
-                confirmed: false,
-            })
-        }
-        [command, action, profile, flag]
-            if command == "model" && action == "load-probe" && flag == "--confirm" =>
-        {
-            Some(Command::ModelLoadProbe {
-                profile: parse_local_profile(profile)?,
-                confirmed: true,
+                profile,
+                confirmed,
+                allow_experimental,
+                memory_ceiling_bytes,
             })
         }
         [command, action] if command == "connect" && action == "list" => Some(Command::ConnectList),
@@ -1251,7 +1280,12 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 "Model loading, local chat, and the Dociler API remain disabled."
             )?;
         }
-        Command::ModelLoadProbe { profile, confirmed } => {
+        Command::ModelLoadProbe {
+            profile,
+            confirmed,
+            allow_experimental,
+            memory_ceiling_bytes,
+        } => {
             if !confirmed {
                 return Err(CommandError::Usage(
                     "model load probe executes a local model and requires explicit consent: dociler model load-probe PROFILE --confirm",
@@ -1273,9 +1307,32 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 output,
                 "This does not qualify the full context, memory target, model quality, or local chat."
             )?;
+            if allow_experimental {
+                writeln!(
+                    output,
+                    "Experimental 6–8 GB hardware tier is explicitly permitted."
+                )?;
+            }
+            if let Some(ceiling) = memory_ceiling_bytes {
+                writeln!(
+                    output,
+                    "Enforcing process-group memory ceiling of {ceiling} bytes."
+                )?;
+            }
             output.flush()?;
-            let report = probe_cached_model(&app_paths, *runtime, profile, true, &cancellation)
-                .map_err(CommandError::ModelProbe)?;
+            let options = ModelProbeOptions {
+                confirmed: true,
+                allow_experimental,
+                memory_ceiling_bytes,
+            };
+            let report = probe_cached_model_with_options(
+                &app_paths,
+                *runtime,
+                profile,
+                options,
+                &cancellation,
+            )
+            .map_err(CommandError::ModelProbe)?;
             writeln!(
                 output,
                 "Model load probe passed for {} at {} tokens; health was ready in {} ms and generation took {} ms.",

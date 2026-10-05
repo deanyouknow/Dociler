@@ -265,10 +265,24 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
   contain the exact server binary, all required shared libraries, and file counts within
   bounds before publication. Added ADR-028, updated CLI output, TUI `/model status`,
   documentation, and tests. (Total suite: 126 passed, 1 ignored; PTY integration passed).
+- Added configurable memory ceiling and experimental tier flags to CLI model load-probe,
+  opt-in real GGUF ceiling/cancellation tests, and integration test coverage.
+  `dociler model load-probe PROFILE --confirm [--experimental] [--ceiling-bytes BYTES]`
+  now exposes `--experimental` (alias `--allow-experimental`) to permit probing 6–8 GB
+  experimental Lite hardware tier hosts, and `--ceiling-bytes <BYTES>` (alias `--memory-ceiling-bytes <BYTES>`,
+  supporting both `--flag val` and `--flag=val` syntax) to enforce active process-group
+  peak RSS limits during probing. Added opt-in real GGUF tests in `crates/dociler-core/src/model_probe.rs`:
+  `real_smollm2_fixture_aborts_on_memory_ceiling_breach` and
+  `real_smollm2_fixture_loading_cancellation_stops_server`. Added CLI integration tests in
+  `crates/dociler/tests/cli.rs`: `model_load_probe_supports_experimental_and_ceiling_bytes_flags`
+  verifying consent enforcement, invalid ceiling argument rejection (exit code 2),
+  arbitrary flag ordering, and correct execution dispatch. Added ADR-029 and updated
+  `docs/cli-ux.md`, `docs/decisions.md`, `docs/models-and-runtime.md`, and `docs/testing-and-release.md`.
+  (Total suite: 130 passed, 3 ignored; PTY integration passed).
 
 ## Work in progress
 
-None; clean tree ready for commit.
+None.
 
 ## Next recommended task
 
@@ -391,8 +405,28 @@ repository or shell startup files. Use the normal rustup setup described in
   into `RuntimeAsset`; preflight host CPU capabilities and reject missing instructions early
   before multi-gigabyte GGUF hashing or child execution; enforce installed server and
   shared-library manifests in `verify_install_at`.
+- ADR-029: configurable memory ceiling and experimental tier flags for diagnostic model load
+  probe; expose `--experimental` (alias `--allow-experimental`) to admit 6–8 GB Lite
+  hardware tier hosts, and `--ceiling-bytes <BYTES>` (alias `--memory-ceiling-bytes <BYTES>`)
+  to enforce process-group peak RSS ceiling limits during diagnostic model probing;
+  reject invalid or zero values fail closed.
 
 ## Verification
+
+### M4 CLI model load-probe experimental and memory ceiling flags — 2026-10-05
+
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`.
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`.
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (130 tests passed, 3 ignored):
+  - `dociler` bin unit tests: 17 passed.
+  - `dociler` CLI integration tests: 20 passed.
+  - `dociler-core` unit tests: 77 passed, 3 ignored (opt-in real SmolLM2 tests).
+  - `foundation`: 11 passed.
+  - `remote`: 5 passed.
+- **passed:** `python3 scripts/test_tui_pty.py target/debug/dociler` (PTY onboarding, health check, multi-turn chat, cancellation, resize, and cleanup).
+- **passed:** `python3 scripts/check_docs.py` (17 Markdown files, 67 relative links, README coverage).
+- **passed:** `git diff --check` (no whitespace or newline errors).
+- **not run:** opt-in real GGUF SmolLM2 test suite, full-context 8K/16K workloads, native non-Linux platforms.
 
 ### M4 Compiled per-target runtime inventory and CPU-instruction admission gate — 2026-09-28
 
@@ -983,3 +1017,4 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-09-28T01:40:00Z | Antigravity | Model cache removal, repair, download signal cancellation, and loading probe cancellation | Add safe model removal and repair commands in core and CLI, download signal cancellation wiring, and loading-phase probe cancellation test | crates/dociler-core/src/assets.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, crates/dociler/tests/cli.rs, docs/decisions.md, docs/models-and-runtime.md, docs/cli-ux.md, docs/testing-and-release.md, CHECKPOINT.md | passed: `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`, `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (107 tests passed, 1 ignored), `python3 scripts/check_docs.py`, `git diff --check`; not run: real GGUF opt-in test, non-Linux native platforms, full-context quality gates | COMPLETE; M4 CACHE LIFECYCLE & CANCELLATION ACTIVE | Verify signal cancellation during an actual long-running pinned Lite/Pro load; attempt real Lite/Pro diagnostics with memory limits |
 | 2026-09-28T02:05:00Z | Antigravity | TUI local profile selection, inspection, removal/repair UI, and /model workflow | Implement /model command in TUI with list, status, info, use, unload, remove, and repair subcommands; local/remote backend switching; tests and docs | crates/dociler/src/tui.rs, docs/cli-ux.md, docs/decisions.md, docs/models-and-runtime.md, CHECKPOINT.md | passed: fmt, clippy -D warnings, 124 workspace tests (1 ignored), test_tui_pty.py, check_docs.py, git diff --check | COMPLETE; M4 TUI LOCAL SELECTION ACTIVE | Verify signal cancellation during long-running Lite/Pro load or implement compiled per-file/CPU-instruction release manifest |
 | 2026-09-28T02:29:00Z | Antigravity | Compiled per-target runtime inventory and CPU-instruction release admission gate | Compile expected binaries/libraries and required/recommended CPU instructions into RuntimeAsset, enforce instruction compatibility in preflight/probes, and validate compiled inventory in runtime installation | crates/dociler-core/src/assets.rs, crates/dociler-core/src/hardware.rs, crates/dociler-core/src/runtime_install.rs, crates/dociler-core/src/runtime_probe.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/src/main.rs, crates/dociler/src/tui.rs, crates/dociler/tests/cli.rs, scripts/test_tui_pty.py, docs/decisions.md, docs/models-and-runtime.md, CHECKPOINT.md | passed: cargo fmt --check, clippy -D warnings, 126 workspace tests (1 ignored), test_tui_pty.py, check_docs.py, git diff --check | COMPLETE; M4 RUNTIME INVENTORY & CPU GATE ACTIVE | Attempt real Lite/Pro diagnostics with memory limits and verify signal cancellation during long-running pinned loads |
+| 2026-10-05T00:43:00Z | Antigravity | CLI model load-probe experimental and memory ceiling flags, opt-in real GGUF ceiling/cancellation tests, and CLI signal verification | Add --experimental and --ceiling-bytes to CLI model load-probe, enforce options during probing, add real GGUF opt-in ceiling and cancellation tests, add CLI integration tests, docs | crates/dociler/src/main.rs, crates/dociler-core/src/model_probe.rs, crates/dociler/tests/cli.rs, docs/cli-ux.md, docs/decisions.md, docs/models-and-runtime.md, docs/testing-and-release.md, CHECKPOINT.md | passed: cargo fmt --check, clippy -D warnings, 130 workspace tests (3 ignored), test_tui_pty.py, check_docs.py, git diff --check | COMPLETE | Attempt real Lite/Pro diagnostics with memory limits and verify signal cancellation during long-running pinned loads |

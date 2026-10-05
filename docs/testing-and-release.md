@@ -262,7 +262,11 @@ aborts cleanly and reaps the child process upon ceiling breach
 incomplete hardware preflight states fail closed without explicit opt-in
 (`hardware_gate_rejects_experimental_and_incomplete_states`). The opt-in real
 SmolLM2 135M fixture test additionally verifies that process-group peak RSS is
-reported and strictly greater than zero alongside server-only peak RSS. These
+reported and strictly greater than zero alongside server-only peak RSS. Additional
+opt-in real GGUF tests verify that setting an unmeetable memory ceiling aborts cleanly
+and reports `MemoryLimitExceeded` (`real_smollm2_fixture_aborts_on_memory_ceiling_breach`),
+and that pre-cancellation safely halts probe execution without orphaned server
+sidecars (`real_smollm2_fixture_loading_cancellation_stops_server`). These
 checks establish measurable memory telemetry and active ceiling enforcement
 during diagnostic probing; full-context 8K/16K extended workloads, multi-GB
 pinned Lite/Pro qualification, and native non-Linux memory telemetry remain
@@ -280,4 +284,8 @@ archives and installed directory trees
 (`remove_cached_runtime_removes_archive_and_installed_tree`), and rejects
 symlinks fail-closed (`remove_cached_assets_rejects_symlinks`). CLI integration
 tests verify that `model remove` and `model repair` dry-run safely without writes
-when unconfirmed and execute correctly when confirmed.
+when unconfirmed and execute correctly when confirmed. Furthermore, CLI integration
+tests verify that `model load-probe` recognizes `--experimental` and `--ceiling-bytes <BYTES>`
+(and inline `--ceiling-bytes=BYTES`), requires `--confirm` consent, rejects invalid
+or zero values with usage exit code 2, and preserves arbitrary flag ordering
+(`model_load_probe_supports_experimental_and_ceiling_bytes_flags`).

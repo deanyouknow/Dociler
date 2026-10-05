@@ -219,9 +219,10 @@ reservation-to-child-bind interval remains a local TOCTOU boundary, mitigated
 by the private key challenge and strict loopback response checks. This probe
 does not prove model fit, generation quality, GPU acceleration, or API safety.
 
-`dociler model load-probe PROFILE --confirm` is a separate explicit diagnostic
+`dociler model load-probe PROFILE --confirm [--experimental] [--ceiling-bytes BYTES]` is a separate explicit diagnostic
 for an already cached pinned GGUF and installed runtime. It fully rehashes both,
-runs a fresh hardware preflight, rejects experimental/incomplete/blocked states,
+runs a fresh hardware preflight, rejects experimental/incomplete/blocked states
+by default (unless `--experimental` is explicitly passed for 6–8 GB Lite hosts),
 checks the pinned server version, then repeats verification and preflight before
 spawning the single-model process. The current conservative settings are CPU
 only (`--n-gpu-layers 0`), 1,024 context tokens, one slot, up to four worker
@@ -251,13 +252,14 @@ RSS and concurrent process-group RSS across Dociler, the server, and any sidecar
 descendant tasks (`/proc/<pid>/task/<pid>/children`), reporting both metrics
 honestly (`server_peak_rss_bytes` and `process_group_peak_rss_bytes`). Missing
 metrics report “unavailable” (`None`), never zero. An enforceable memory ceiling
-guard (`memory_ceiling_bytes`) can be passed to the probe: if combined RSS
-crosses the ceiling at any sampling tick, cooperative cancellation trips
-immediately and the sidecar is stopped and reaped. Hardware preflight fails
-closed: experimental 6–8 GB Lite tiers require explicit opt-in
-(`allow_experimental`), while insufficient or incomplete hardware configurations
-are always refused. These diagnostics alone do not admit Lite/Pro for release;
-they provide enforceable memory safety and telemetry during evaluation.
+guard (`memory_ceiling_bytes`, exposed on the CLI via `--ceiling-bytes <BYTES>`)
+can be passed to the probe: if combined RSS crosses the ceiling at any sampling tick,
+cooperative cancellation trips immediately and the sidecar is stopped and reaped.
+Hardware preflight fails closed: experimental 6–8 GB Lite tiers require explicit
+opt-in (`allow_experimental`, exposed on the CLI via `--experimental`), while
+insufficient or incomplete hardware configurations are always refused. These
+diagnostics alone do not admit Lite/Pro for release; they provide enforceable
+memory safety and telemetry during evaluation.
 
 `dociler model remove TARGET --confirm` safely removes cached models (`dociler-lite`,
 `dociler-pro`), the `runtime` archive and extracted directory, or `all` cached
