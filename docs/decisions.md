@@ -549,3 +549,23 @@ destructive operations.
 **Why:** Local-first document Q&A requires responsive, grounded retrieval without external vector databases, persistent embedding indices, or network calls. Standard BM25 with length normalization and term frequency saturation provides excellent lexical search accuracy for technical and office documents while maintaining zero on-disk footprint. Carrying heading and page provenance through chunking enables verifiable source citations in model prompts and grounded factual checking.
 
 **Rejected:** Embedding models or persistent vector databases in v1; arbitrary character-window or sliding-window chunking that breaks paragraphs and tables; losing heading hierarchy and page numbers during chunking; omitting table headers when splitting tabular rows; persisting BM25 indices to disk.
+
+## ADR-033: Context strategies, untrusted document prompt assembly, and citation validation
+
+**Decision:** Implement context strategies, 5-layer prompt assembly, and post-generation citation validation in `crates/dociler-core/src/context.rs`:
+1. **Context Strategies:**
+   - `Direct`: For explicit document selection, packs complete source-labelled chunks in document and ordinal order within the request token budget.
+   - `Retrieval`: For questions, executes BM25 search, diversifies top-scoring chunks across files/sections, and includes adjacent chunks for continuity up to the token budget.
+   - `MapReduce`: For long documents or summaries, deterministically partitions chunks into bounded batches (`plan_map_reduce_batches`) up to `batch_token_budget` for map extraction, preserving document order.
+2. **Context Budgeting:** Define `ContextBudget` with profiles for `dociler-lite` (8,192 max context, 1,024 reserved completion) and `dociler-pro` (16,384 max context, 2,048 reserved completion), strictly reserving space for model responses and calculating prompt overhead.
+3. **Five-Layer Prompt Assembly:** Enforce the required prompt structure:
+   - Layer 1: Dociler core safety and grounding policy (`SkillModule::CorePolicy`).
+   - Layer 2: Relevant immutable built-in skill modules (`GroundedReading`, `Summarization`, `Comparison`, `Citation`).
+   - Layer 3: Client/system preferences that do not conflict with core policy.
+   - Layer 4: Source-labelled document chunks inside explicit untrusted delimiters (`=== BEGIN UNTRUSTED DOCUMENT CONTENT ===` / `=== END UNTRUSTED DOCUMENT CONTENT ===`).
+   - Layer 5: Conversation context and current user request.
+4. **Citation Validation & Hallucination Prevention:** Parse generated `[source: <id>]` citations and verify them against the exact set of active source IDs supplied in Layer 4. Verified citations are kept unchanged. Impossible or invented citations are rewritten to `[unverified source: <id>]` and never mapped to nearby real sources. Provide validation metrics including `total_citations`, `verified_citations`, `unverified_citations`, and `valid_ratio()`.
+
+**Why:** Documents are untrusted external inputs that must be demarcated so they cannot hijack system instructions or prompt injection vectors. Factual Q&A requires that models attribute assertions to verifiable source chunks. Detecting invented source IDs at the host boundary prevents hallucinated references from being presented to users as authentic evidence while giving automated test suites exact accuracy and citation validity metrics.
+
+**Rejected:** Allowing document text outside explicit untrusted delimiters; allowing user or document content to override core grounding policy; silently stripping or mapping hallucinated citations to random real chunks; sending unmetered document content that breaches the context window.

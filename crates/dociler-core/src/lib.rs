@@ -7,6 +7,7 @@ pub mod assets;
 pub mod cancellation;
 pub mod chat;
 pub mod config;
+pub mod context;
 pub mod credentials;
 pub mod diagnostics;
 pub mod document;
