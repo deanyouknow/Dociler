@@ -13,6 +13,7 @@ pub mod document;
 pub mod downloads;
 pub mod extractor;
 pub mod hardware;
+pub mod indexing;
 pub mod model_probe;
 pub mod paths;
 mod probe_memory;

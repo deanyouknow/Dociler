@@ -534,3 +534,18 @@ destructive operations.
 **Why:** Documents from untrusted workspaces can contain decompression bombs, malformed container structures, hostile parser exploit payloads, or infinite loop constructs. Executing parsers in-process risks memory exhaustion, process crashes, or hangs that would corrupt or terminate the user's interactive session. An isolated worker child with bounded execution time, memory monitoring, and process group termination confines potential parser failures to the child process without endangering host state. Writing native parsers with standard pure-Rust crates (`zip`, `flate2`) maintains portability across all five target platforms without native external C/Java runtime dependencies.
 
 **Rejected:** Parsing untrusted binary office formats directly in the host process; using external Java/Tika or C runtimes with uncontrolled network or build requirements; allowing unmetered ZIP/XML decompression; accepting encrypted documents or failing silently on scanned PDFs.
+
+## ADR-032: In-memory BM25 document indexing, semantic block chunking, and source provenance citation
+
+**Decision:** Implement in-memory semantic block chunking and Robertson-Sparck Jones BM25 retrieval in `crates/dociler-core/src/indexing.rs`:
+1. **Semantic Block Chunking:** Transform canonical `Document` ASTs into `Chunk` records at semantic block boundaries (headings, paragraphs, tables, lists, code fences). Preserve contextual metadata on every chunk: document digest, display name, ordinal, nearest heading (`§ Heading`), page anchor (`Page N`), and source anchor.
+2. **Boundary Splitting & Overlap:**
+   - Oversized paragraphs exceeding `max_chunk_tokens` (default 512 tokens, ~4 chars/token heuristic) are split with configurable token overlap (default 64 tokens) to preserve cross-chunk context.
+   - Oversized tables exceeding `max_chunk_tokens` are split by rows while repeating column headers on every chunk to maintain tabular semantics.
+3. **In-Memory BM25 Index:** Construct an inverted index (`Bm25Index`) with Robertson-Sparck Jones IDF formula: `ln((N - n + 0.5) / (n + 0.5) + 1.0)`, term frequency saturation (`k1 = 1.2`), and document length normalization (`b = 0.75`).
+4. **Session-Local Stable Identifiers:** Generate deterministic citation IDs formatted as `<digest_prefix>:c<ordinal>` (e.g. `1a2b3c4d:c0`), with human-readable citation headers (`[source: 1a2b3c4d:c0, "spec.docx", § Overview, Page 1]`).
+5. **Scoped Retrieval & Context Expansion:** Support `@filename` or digest prefix scoping in queries or search filters, and provide adjacent chunk retrieval (`get_adjacent_chunks`) from the same document for context continuity without database persistence.
+
+**Why:** Local-first document Q&A requires responsive, grounded retrieval without external vector databases, persistent embedding indices, or network calls. Standard BM25 with length normalization and term frequency saturation provides excellent lexical search accuracy for technical and office documents while maintaining zero on-disk footprint. Carrying heading and page provenance through chunking enables verifiable source citations in model prompts and grounded factual checking.
+
+**Rejected:** Embedding models or persistent vector databases in v1; arbitrary character-window or sliding-window chunking that breaks paragraphs and tables; losing heading hierarchy and page numbers during chunking; omitting table headers when splitting tabular rows; persisting BM25 indices to disk.
