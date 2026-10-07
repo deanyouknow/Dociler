@@ -13,6 +13,7 @@ pub mod diagnostics;
 pub mod document;
 pub mod downloads;
 pub mod editing;
+pub mod evaluation;
 pub mod export;
 pub mod extractor;
 pub mod hardware;

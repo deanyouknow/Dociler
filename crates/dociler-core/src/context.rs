@@ -18,6 +18,18 @@ use crate::indexing::{Bm25Index, Chunk, approx_token_count};
 pub const UNTRUSTED_DOC_START: &str = "=== BEGIN UNTRUSTED DOCUMENT CONTENT ===";
 pub const UNTRUSTED_DOC_END: &str = "=== END UNTRUSTED DOCUMENT CONTENT ===";
 
+/// Sanitizes chunk text to prevent hostile documents from forging Layer 4 boundary tags.
+pub fn sanitize_untrusted_chunk_text(text: &str) -> String {
+    text.replace(
+        UNTRUSTED_DOC_START,
+        "[escaped-delimiter: begin-untrusted-content]",
+    )
+    .replace(
+        UNTRUSTED_DOC_END,
+        "[escaped-delimiter: end-untrusted-content]",
+    )
+}
+
 pub use crate::skills::{SKILLS_VERSION, SkillModule, select_task_skills};
 
 /// Strategy for assembling document context for the model.
@@ -257,7 +269,7 @@ pub fn assemble_prompt(
 
             doc_block_text.push_str(&label);
             doc_block_text.push('\n');
-            doc_block_text.push_str(&chunk.text);
+            doc_block_text.push_str(&sanitize_untrusted_chunk_text(&chunk.text));
             doc_block_text.push_str("\n\n");
 
             active_source_ids.insert(chunk.id.clone());

@@ -692,3 +692,29 @@ destructive operations.
 **Why:** Exposing a secure local-first API requires maintaining strict control over the underlying llama-server lifecycle, preventing multi-tenant token exhaustion via single-slot concurrency limiting, preventing document and prompt hijacking through untrusted boundary delimiters and subordination, protecting user privacy through ephemeral RAII upload staging and remote transmission consent, and providing a deterministic, standards-compliant OpenAPI 3.1 interface for client integrations.
 
 **Rejected:** Exposing raw `llama-server` loopback ports or internal API keys to external clients; allowing unauthenticated or unrestricted concurrent generations on constrained host hardware; persisting uploaded documents beyond request lifecycle; allowing client system messages to override Dociler Core Policy; transmitting document content to remote providers without per-session user consent; leaking absolute server filesystem paths in source citation metadata.
+
+## ADR-038: Privacy guarantees, golden document test matrix, adversarial prompt injection defense, and model quality evaluation gates
+
+**Decision:** Implement Milestone M9 privacy guarantees, golden document test matrix, adversarial prompt injection defense, and model quality evaluation gates in `crates/dociler-core/src/evaluation.rs`, `crates/dociler-core/src/context.rs`, and test suites:
+1. **Zero-Telemetry and Non-Persistence Privacy Guarantees:**
+   - Strict audit asserting zero telemetry endpoints, background network calls, or analytics in the codebase.
+   - Enforce strictly ephemeral in-memory retention: chat messages, prompts, extracted text, and BM25 retrieval indexes are never persisted to disk or workspace directories, remaining memory-only and dropped upon session clear or exit.
+   - Restrictive staging permissions: managed temporary upload files enforce Unix `0o600` permissions (owner read/write only).
+2. **Golden Document Fixtures Matrix Across Supported Formats:**
+   - Validate canonical AST parsing, heading/page provenance, and in-memory BM25 retrieval across all 7 supported word-processing and text formats: Markdown (`.md`), PlainText (`.txt`), Word Document (`.docx`), OpenDocument Text (`.odt`), Rich Text Format (`.rtf`), Portable Document Format (`.pdf`), and Legacy Word (`.doc`).
+   - Each fixture includes headings, paragraphs, lists, tables, links, repeated values, and comprehensive Indonesian (`Bahasa Indonesia`) content (dates such as "17 Agustus 1945", currency such as "Rp 150.000.000,00", and proper nouns).
+   - Negative fixtures test suite enforces fail-closed handling: scanned/image-only PDFs yield explicit OCR-not-in-v1 errors (`ScannedPdfNoText`), encrypted documents are rejected (`EncryptedFile`), malformed/truncated ZIP and OLE containers are rejected (`CorruptedDocument`), extension/MIME mismatches fail validation, decompression bombs exceeding memory limits are halted (`DecompressionLimitExceeded`), and prompt injection documents parse into inert AST text without executing host commands.
+3. **Adversarial Prompt Injection Defense & Grounding Hierarchy:**
+   - Enforce 5-layer prompt hierarchy with Dociler Core Grounding Policy in Layer 1, task skills in Layer 2, subordinate client preferences in Layer 3 (`## Client Preferences`), untrusted document content in Layer 4 (`=== BEGIN UNTRUSTED DOCUMENT CONTENT ===` ... `=== END UNTRUSTED DOCUMENT CONTENT ===`), and user queries in Layer 5.
+   - Neutralize delimiter boundary breakout attacks: `sanitize_untrusted_chunk_text` escapes any forged delimiter tags embedded within untrusted document text (`[escaped-delimiter: begin-untrusted-content]`, `[escaped-delimiter: end-untrusted-content]`), preventing documents from prematurely closing Layer 4.
+   - Source citation validation (`validate_citations`) verifies all `[source: <id>]` citations against active prompt chunk IDs, rewriting hallucinated or forged citations to `[unverified source: <id>]` and never mapping them to nearby real sources.
+4. **Destination-Bound Remote Consent Gate:**
+   - Enforce explicit user consent (`DocumentConsentTracker`) before transmitting local document text upstream to a remote inference profile; consent is strictly bound to the destination profile and origin, cleared upon session reset, and never transferred across origins or over plaintext HTTP.
+5. **Model Quality Evaluation Gates (`evaluation.rs`):**
+   - Provide evaluation criteria and deterministic extraction evaluation (`evaluate_extraction`):
+     - Lite profile gates: >= 85% factual QA accuracy, >= 95% valid citations, 0 invented numeric/date values, 8K active context, <= 5.5 GiB peak RSS, 8 GB host RAM.
+     - Pro profile gates: >= 92% factual QA accuracy, >= 97% valid citations, 0 invented numeric/date values, 16K active context, <= 11.5 GiB peak RSS, 16 GB host RAM.
+
+**Why:** Local-first document AI requires mathematical and architectural guarantees that user documents remain private, that untrusted document content cannot execute commands or hijack model behavior, that citations cannot be fabricated without detection, and that release admission strictly measures factual accuracy and memory ceilings against fixed gates.
+
+**Rejected:** Allowing document text or client prompts to break out of Layer 4 delimiters; sending document content upstream without destination consent; persisting unexported transcripts or document ASTs to disk; relaxing factual QA or citation validity thresholds below gate specifications.

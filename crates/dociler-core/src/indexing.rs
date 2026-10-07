@@ -440,6 +440,18 @@ impl Bm25Index {
         }
     }
 
+    /// Adds multiple chunks into the index.
+    pub fn add_chunks(&mut self, chunks: &[Chunk]) {
+        for chunk in chunks {
+            self.add_chunk(chunk.clone());
+        }
+    }
+
+    /// Convenient search helper without an explicit document filter.
+    pub fn search_simple(&self, query: &str, limit: usize) -> Vec<SearchResult<'_>> {
+        self.search(query, limit, None)
+    }
+
     /// Adds an individual chunk to the index.
     pub fn add_chunk(&mut self, chunk: Chunk) {
         let chunk_idx = self.chunks.len();
