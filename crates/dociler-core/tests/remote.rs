@@ -309,3 +309,37 @@ fn cancellation_aborts_a_stalled_stream_before_transport_timeout() {
     release_sender.send(()).unwrap();
     server.join().unwrap();
 }
+
+#[test]
+fn serializes_system_message_role_properly() {
+    let chat = sse(
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"acknowledged\"}}]}\n\ndata: [DONE]\n\n"
+            .to_vec(),
+    );
+    let (url, captured, server) = serve(vec![chat]);
+
+    let profile = RemoteProfile::new("system-test", &url, "model-s", false).unwrap();
+    let client = RemoteClient::connect(profile, None).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new(Workspace::open(dir.path()).unwrap());
+    session
+        .push(Role::System, "Dociler Core Grounding Policy".into())
+        .unwrap();
+    session.push(Role::User, "User inquiry".into()).unwrap();
+
+    let mut output = String::new();
+    client
+        .stream_chat(session.messages(), |chunk| {
+            output.push_str(chunk);
+            Ok(())
+        })
+        .unwrap();
+
+    server.join().unwrap();
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let chat_req = String::from_utf8_lossy(&requests[0]);
+    assert!(chat_req.contains(r#"{"role":"system","content":"Dociler Core Grounding Policy"}"#));
+    assert!(chat_req.contains(r#"{"role":"user","content":"User inquiry"}"#));
+}

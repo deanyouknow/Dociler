@@ -196,6 +196,7 @@ fn doctor_reports_workspace_without_touching_documents() {
     assert!(text.contains(&format!("{:?}", workspace.0.canonicalize().unwrap())));
     assert!(text.contains("read-only"));
     assert!(text.contains("Hardware inventory: read-only; not persisted"));
+    assert!(text.contains("Skills pack: v1.0.0"));
     assert!(text.contains("dociler-lite:"));
     assert!(text.contains("dociler-pro:"));
     assert!(text.contains("Preflight is not final admission"));

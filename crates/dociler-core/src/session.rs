@@ -8,6 +8,7 @@ const MAX_MESSAGES: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
+    System,
     User,
     Assistant,
 }

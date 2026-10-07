@@ -627,3 +627,34 @@ destructive operations.
 **Why:** A complete terminal assistant requires intuitive in-composer discoverability (`Tab` completion for commands and workspace files), clear indicators of write permissions and API state in the header, safe mutation workflows (preview, confirmation, and memory undo), and secure, zero-config LAN sharing with cryptographically random tokens and constant-time auth verification.
 
 **Rejected:** Allowing workspace writes without explicit preview and confirmation; storing bearer tokens in plaintext configuration files; binding LAN gateway by default without explicit user consent; persisting undo stacks to disk; enabling local chat before memory and quality qualification gates pass.
+
+## ADR-036: Immutable built-in Markdown skills, prompt construction, client subordination, and profile transparency
+
+**Decision:** Implement Milestone M7 skills and prompt construction across core, CLI, TUI, and authenticated LAN gateway:
+1. **Embedded Immutable Markdown Skills:**
+   - Embed 7 immutable Markdown skill modules in `crates/dociler-core/src/skills/` versioned at `SKILLS_VERSION = "1.0.0"` via compile-time `include_str!`:
+     - `core_policy.md`: Dociler Core Grounding Policy (untrusted external document data, evidence-based claims, admitting absent evidence, mandatory citations `[source: <id>]`).
+     - `discovery.md`: Document discovery and workspace cataloging strictly respecting `.gitignore`, `.docilerignore`, rejecting escaping symlinks, and keeping discovery read-only without leaking secrets or dot-files.
+     - `grounded_reading.md`: Grounded document reading strictly admitting absent evidence, preserving technical terms, figures, dates, and names.
+     - `summarization.md`: Objective and faithful summarization preserving dates, figures, numeric metrics, and proper nouns with source attribution.
+     - `comparison.md`: Multi-document systematic side-by-side comparison highlighting agreements, discrepancies, and contradictions with source citations.
+     - `citation.md`: Source citation standards requiring exact syntax `[source: <id>]`, strictly prohibiting hallucinated or altered identifiers.
+     - `safe_editing.md`: Safe in-place text editing guidelines strictly limited to `.md` and `.txt`, atomic diff previews, and session-memory undo.
+2. **Task-Relevant Skill Selection (`select_task_skills`):**
+   - Deterministically inspect task context (intent keywords, document presence, edit requests) to select only task-relevant Layer 2 modules, minimizing prompt token consumption.
+3. **5-Layer Prompt Construction and Subordinate Client Preferences:**
+   - Strictly assemble prompts following Dociler's 5-layer hierarchy:
+     1. Dociler Core Grounding Policy
+     2. Selected task skills
+     3. Client / system preferences (strictly subordinate under `## Client Preferences`)
+     4. Untrusted document excerpts wrapped in explicit boundary delimiters
+     5. User query and conversation turns
+   - In CLI (`dociler run`), TUI chat (`start_generation`), and gateway API (`POST /v1/chat/completions`), client-provided system messages are subordinate and placed in Layer 3; they cannot override or replace Layer 1 core grounding policy.
+4. **Application Profile Transparency and Model Aliasing:**
+   - `dociler-lite` and `dociler-pro` are transparent application profiles combining Dociler's built-in skills and runtime configurations over upstream open-weights base models (Qwen3.5 4B and Qwen3.5 9B), not newly trained weights.
+   - Enforce Dociler profile aliases in the public gateway API: `GET /v1/models` and `POST /v1/chat/completions` accept only `dociler-lite` and `dociler-pro`. Any raw upstream model names or foreign model aliases are rejected with 400 `model_not_found`.
+   - Disclose base model provenance, licensing, and `SKILLS_VERSION` in `/model info`, `dociler doctor`, and notices.
+
+**Why:** Grounding language model responses on untrusted external documents requires strict, unshakeable separation between system policies and untrusted text or user inputs. Client-provided system messages must not be permitted to disable grounding rules or inject hostile instructions. Compiling skills directly into the release binary as versioned Markdown modules guarantees reproducibility across all execution environments without filesystem dependencies. Maintaining full transparency on model profiles ensures honest attribution to upstream open-source models while establishing clear expectations regarding Dociler's application layer.
+
+**Rejected:** Allowing client system messages to replace or supersede Dociler Core Grounding Policy; loading dynamic, unversioned skills from the workspace or external network; claiming Dociler profile aliases as newly trained weights or hiding base model licenses; exposing raw backend or upstream model names through public API endpoints.

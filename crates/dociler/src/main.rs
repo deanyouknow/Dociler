@@ -10,6 +10,7 @@ use dociler_core::assets::{
 };
 use dociler_core::chat::CancellationToken;
 use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings, LocalProfile};
+use dociler_core::context::{ContextBudget, ContextStrategy, assemble_prompt};
 use dociler_core::credentials::{CredentialError, CredentialStore, OsCredentialStore, Secret};
 use dociler_core::diagnostics::Diagnostics;
 use dociler_core::document::{
@@ -43,6 +44,7 @@ use dociler_core::runtime_probe::{
     RuntimeProbeError, RuntimeProbeOptions, probe_installed_runtime,
 };
 use dociler_core::session::{Role, Session};
+use dociler_core::skills::{SKILLS_VERSION, SkillModule, select_task_skills};
 use dociler_core::workspace::{DiscoveryError, Workspace, WritePolicy};
 
 mod cli_signals;
@@ -1993,9 +1995,23 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             if prompt.trim().is_empty() {
                 return Err(CommandError::Input);
             }
-            let mut session = Session::new(workspace()?);
+            let ws = workspace()?;
+            let mut session = Session::new(ws);
+            let skills = select_task_skills(&prompt, false, false);
+            let budget = ContextBudget::lite();
+            let assembled = assemble_prompt(
+                ContextStrategy::Direct,
+                &skills,
+                None,
+                &[],
+                &prompt,
+                &budget,
+            );
             session
-                .push(Role::User, prompt)
+                .push(Role::System, assembled.system_prompt)
+                .map_err(|_| CommandError::Input)?;
+            session
+                .push(Role::User, assembled.user_prompt)
                 .map_err(|_| CommandError::Input)?;
             let answer = client
                 .stream_chat(session.messages(), |text| {
@@ -2033,6 +2049,12 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             writeln!(
                 output,
                 "Document reading and AST export: enabled; local inference: disabled pending release gates"
+            )?;
+            writeln!(
+                output,
+                "Skills pack: v{} ({} built-in immutable modules)",
+                SKILLS_VERSION,
+                SkillModule::all().len()
             )?;
             let app_paths = paths()?;
             let hardware = HardwareInventory::inspect(&app_paths.models_dir());

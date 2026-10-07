@@ -1455,7 +1455,7 @@ impl App {
         let artifact = asset.artifact();
         let reqs = dociler_core::hardware::ModelRequirements::for_profile(profile);
         let text = format!(
-            "Profile: {}\nBase model: {}\nRepository: {}\nRevision: {}\nLicense: {}\nArtifact: {} ({})\nSHA-256: {}\nContext: {} tokens\nRAM required: {} (min {})\nDisk required: {}\nQualification: Local chat is disabled pending 8K/16K context, peak RSS <= 5.5/11.5 GiB, and quality gates.",
+            "Profile: {}\nBase model: {}\nRepository: {}\nRevision: {}\nLicense: {}\nArtifact: {} ({})\nSHA-256: {}\nContext: {} tokens\nRAM required: {} (min {})\nDisk required: {}\nTransparency: '{}' is a transparent Dociler application profile embedding immutable skills (v{}) over base model '{}', not newly trained weights.\nQualification: Local chat is disabled pending 8K/16K context, peak RSS <= 5.5/11.5 GiB, and quality gates.",
             profile.alias(),
             asset.base_model(),
             asset.repository(),
@@ -1468,6 +1468,9 @@ impl App {
             format_gb(reqs.supported_total_memory_bytes()),
             format_gb(reqs.minimum_total_memory_bytes()),
             format_gb(reqs.required_free_disk_bytes()),
+            profile.alias(),
+            dociler_core::skills::SKILLS_VERSION,
+            asset.base_model(),
         );
         self.notice(text);
     }
@@ -1872,8 +1875,33 @@ impl App {
             return;
         };
         let profile_name = profile.name().to_owned();
-        let generation = match Generation::start(
+        let system_prompt = if session.messages().is_empty() {
+            let has_docs = self
+                .workspace
+                .discover_documents()
+                .map(|d| !d.is_empty())
+                .unwrap_or(false);
+            let is_edit = prompt.starts_with("/edit") || prompt.to_lowercase().contains("edit");
+            let skills = dociler_core::skills::select_task_skills(&prompt, has_docs, is_edit);
+            let budget = match self.active_local {
+                Some(LocalProfile::Pro) => dociler_core::context::ContextBudget::pro(),
+                _ => dociler_core::context::ContextBudget::lite(),
+            };
+            let assembled = dociler_core::context::assemble_prompt(
+                dociler_core::context::ContextStrategy::Direct,
+                &skills,
+                None,
+                &[],
+                &prompt,
+                &budget,
+            );
+            Some(assembled.system_prompt)
+        } else {
+            None
+        };
+        let generation = match Generation::start_with_system(
             session,
+            system_prompt,
             prompt.clone(),
             Box::new(RemoteChatBackend::native(profile)),
         ) {

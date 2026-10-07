@@ -368,6 +368,7 @@ impl<'a> RemoteClient<'a> {
             .iter()
             .map(|message| RemoteMessage {
                 role: match message.role() {
+                    Role::System => "system",
                     Role::User => "user",
                     Role::Assistant => "assistant",
                 },
@@ -425,6 +426,7 @@ impl<'a> RemoteClient<'a> {
             .iter()
             .map(|message| RemoteMessage {
                 role: match message.role() {
+                    Role::System => "system",
                     Role::User => "user",
                     Role::Assistant => "assistant",
                 },

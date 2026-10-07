@@ -119,12 +119,18 @@ pub struct Generation {
 }
 
 impl Generation {
-    /// Returns the unchanged session if the prompt would exceed its memory limit.
-    pub fn start(
+    /// Starts generation with an optional system prompt if the session is empty.
+    pub fn start_with_system(
         mut session: Session,
+        system_prompt: Option<String>,
         prompt: String,
         backend: Box<dyn ChatBackend>,
     ) -> Result<Self, Session> {
+        if let Some(sys) = system_prompt {
+            if session.messages().is_empty() && session.push(Role::System, sys).is_err() {
+                return Err(session);
+            }
+        }
         if session.push(Role::User, prompt).is_err() {
             return Err(session);
         }
@@ -171,6 +177,15 @@ impl Generation {
             receiver,
             cancellation,
         })
+    }
+
+    /// Returns the unchanged session if the prompt would exceed its memory limit.
+    pub fn start(
+        session: Session,
+        prompt: String,
+        backend: Box<dyn ChatBackend>,
+    ) -> Result<Self, Session> {
+        Self::start_with_system(session, None, prompt, backend)
     }
 
     pub fn poll(&self) -> (GenerationPoll, Option<GenerationEvent>) {
