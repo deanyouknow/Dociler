@@ -25,6 +25,7 @@ pub mod remote;
 pub mod remote_serve;
 pub mod runtime_install;
 pub mod runtime_probe;
+pub mod runtime_router;
 pub mod session;
 pub mod skills;
 pub mod workspace;

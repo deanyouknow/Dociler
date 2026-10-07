@@ -1063,6 +1063,8 @@ impl App {
                             } else {
                                 ModelHealthStatus::Unloaded
                             },
+                            router: None,
+                            local_chat_enabled: false,
                         };
 
                         match start_gateway(config, token) {
@@ -2236,6 +2238,9 @@ fn worker_error_message(error: ChatError) -> &'static str {
         ChatError::Remote(RemoteError::InvalidProfile | RemoteError::InvalidResponse) => {
             "Remote profile or response was invalid."
         }
+        ChatError::Remote(RemoteError::DocumentConsentRequired) => {
+            "Transmitting local document content upstream requires explicit destination consent."
+        }
         ChatError::Remote(RemoteError::Output) | ChatError::Delivery => {
             "Internal response delivery failed."
         }
@@ -2282,6 +2287,9 @@ fn profile_install_error_message(error: ProfileInstallError) -> &'static str {
         }
         ProfileInstallError::Remote(RemoteError::Cancelled) | ProfileInstallError::Cancelled => {
             "Remote setup was cancelled. Nothing was saved."
+        }
+        ProfileInstallError::Remote(RemoteError::DocumentConsentRequired) => {
+            "Transmitting local document content upstream requires explicit destination consent."
         }
         ProfileInstallError::Remote(RemoteError::Output) => {
             "Internal verification delivery failed. Nothing was saved."

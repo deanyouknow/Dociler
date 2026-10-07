@@ -658,3 +658,37 @@ destructive operations.
 **Why:** Grounding language model responses on untrusted external documents requires strict, unshakeable separation between system policies and untrusted text or user inputs. Client-provided system messages must not be permitted to disable grounding rules or inject hostile instructions. Compiling skills directly into the release binary as versioned Markdown modules guarantees reproducibility across all execution environments without filesystem dependencies. Maintaining full transparency on model profiles ensures honest attribution to upstream open-source models while establishing clear expectations regarding Dociler's application layer.
 
 **Rejected:** Allowing client system messages to replace or supersede Dociler Core Grounding Policy; loading dynamic, unversioned skills from the workspace or external network; claiming Dociler profile aliases as newly trained weights or hiding base model licenses; exposing raw backend or upstream model names through public API endpoints.
+
+## ADR-037: Local and remote API behavior, loopback router lifecycle, concurrency limiting, and document analysis pipeline
+
+**Decision:** Implement Milestone M8 local and remote API behaviors in `crates/dociler-core/src/runtime_router.rs`, `crates/dociler-core/src/remote_serve.rs`, and `crates/dociler-core/src/remote.rs`:
+1. **Dociler-Managed `llama-server` Loopback Router Lifecycle (`RuntimeRouter`):**
+   - Bind child process strictly to an OS-assigned ephemeral loopback port (`127.0.0.1:<port>`).
+   - Secure sidecar with a cryptographically generated 256-bit internal API key passed via `--api-key-file`.
+   - Process isolation on Unix via `process_group(0)`, cleared environment, bounded stderr diagnostic capture (64 KiB ring buffer), active loopback `/health` polling during startup, and graceful termination (`SIGTERM` followed by bounded reap / `SIGKILL` on drop).
+   - Public responses, headers, and logs never leak the raw loopback port, internal key, or base-model identifier.
+2. **Gateway Concurrency Limiting (HTTP 429 `rate_limit_exceeded`):**
+   - Limit local inference to exactly 1 concurrent generation permit across `/v1/chat/completions` and `/v1/documents/analyze` (`try_acquire_generation_permit`).
+   - When occupied, immediately return HTTP 429 with standard Dociler error envelope (`rate_limit_exceeded`). Permit release is guaranteed on all exit and drop paths via RAII guard.
+3. **`POST /v1/chat/completions` Endpoint:**
+   - Strict model validation against active Dociler profile (`dociler-lite` / `dociler-pro`); reject unknown aliases or mismatches with HTTP 400 (`model_not_found`).
+   - Subordinate client system messages into Layer 3 under `## Client Preferences`.
+   - Dynamically select task-relevant built-in skills (`select_task_skills`) into Layer 2.
+   - Enforce parameter bounds: `temperature` (0.0–2.0), `top_p` (0.0–1.0), `max_tokens` (>= 1); reject unsupported parameters (e.g. `n`, `tools`, `functions`, `logit_bias`) with HTTP 400 (`unsupported_field`).
+   - Forward to router or mock provider; stream via SSE (`text/event-stream`) with chunk events and terminal `[DONE]`; cancel inference promptly on client disconnect.
+   - Fail closed with HTTP 503 `local_chat_disabled` when local model inference has not passed qualification gates.
+4. **`POST /v1/documents/analyze` Multipart Pipeline:**
+   - Zero-dependency multipart parser (`parse_multipart_form_data`) accepting `file` (required), `prompt` (required), `model` (optional), and `stream` (optional).
+   - Stage document uploads in a managed temporary file with restrictive permissions (`0o600`), guaranteed deleted on all success, failure, and disconnect paths via RAII guard.
+   - Enforce format validation: max size 50 MiB, MIME verification, and magic-byte checks.
+   - Extract content via native in-process handler for direct-editable `.md` and `.txt` (per ADR-030) and sandboxed worker process for binary formats (`.docx`, `.pdf`, `.odt`, `.rtf`, `.doc` per ADR-031).
+   - Chunk document via semantic block chunker (`chunk_document`), select document skills (`select_task_skills` with `has_documents: true`), assemble 5-layer prompt with untrusted boundary delimiters (`=== BEGIN UNTRUSTED DOCUMENT CONTENT ===`), and generate response.
+   - Emit verified source citations and optional `dociler_sources` metadata (uploaded filename, nearest heading, page anchors only; never absolute server filesystem paths).
+5. **Upstream Remote Consent Gate (`DocumentConsentTracker`):**
+   - For remote profiles, identify destination and require explicit consent once per session before transmitting local document text upstream.
+6. **OpenAPI 3.1 Specification (`GET /openapi.json`):**
+   - Provide a versioned, strictly conformant OpenAPI 3.1 specification describing `/healthz`, `/v1/models`, `/v1/chat/completions`, `/v1/documents/analyze`, and `/openapi.json` with exact request bodies, query params, response schemas, and error envelopes.
+
+**Why:** Exposing a secure local-first API requires maintaining strict control over the underlying llama-server lifecycle, preventing multi-tenant token exhaustion via single-slot concurrency limiting, preventing document and prompt hijacking through untrusted boundary delimiters and subordination, protecting user privacy through ephemeral RAII upload staging and remote transmission consent, and providing a deterministic, standards-compliant OpenAPI 3.1 interface for client integrations.
+
+**Rejected:** Exposing raw `llama-server` loopback ports or internal API keys to external clients; allowing unauthenticated or unrestricted concurrent generations on constrained host hardware; persisting uploaded documents beyond request lifecycle; allowing client system messages to override Dociler Core Policy; transmitting document content to remote providers without per-session user consent; leaking absolute server filesystem paths in source citation metadata.

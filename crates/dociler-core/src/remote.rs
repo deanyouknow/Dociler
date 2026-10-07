@@ -91,6 +91,35 @@ impl RemoteProfile {
     }
 }
 
+/// Tracks session-scoped destination consent before transmitting local document text upstream.
+#[derive(Debug, Default, Clone)]
+pub struct DocumentConsentTracker {
+    consented_destinations: std::collections::HashSet<String>,
+}
+
+impl DocumentConsentTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check if consent has been granted for the specific profile and endpoint origin.
+    pub fn has_consent(&self, profile: &RemoteProfile) -> bool {
+        let key = format!("{}:{}", profile.name(), profile.base_url());
+        self.consented_destinations.contains(&key)
+    }
+
+    /// Explicitly grant consent for the specific profile and endpoint origin for this session.
+    pub fn grant_consent(&mut self, profile: &RemoteProfile) {
+        let key = format!("{}:{}", profile.name(), profile.base_url());
+        self.consented_destinations.insert(key);
+    }
+
+    /// Revoke all granted consents.
+    pub fn clear(&mut self) {
+        self.consented_destinations.clear();
+    }
+}
+
 fn valid_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 48
@@ -114,6 +143,7 @@ pub enum RemoteError {
     InvalidResponse,
     ModelUnavailable,
     ResponseLimit,
+    DocumentConsentRequired,
     Cancelled,
     Output,
 }
@@ -130,6 +160,9 @@ impl fmt::Display for RemoteError {
             Self::InvalidResponse => "remote endpoint returned an invalid response",
             Self::ModelUnavailable => "configured upstream model is unavailable",
             Self::ResponseLimit => "remote response exceeded the safety limit",
+            Self::DocumentConsentRequired => {
+                "transmitting local document content upstream requires explicit destination consent"
+            }
             Self::Cancelled => "remote response was cancelled",
             Self::Output => "response output failed",
         };
@@ -264,6 +297,23 @@ impl<'a> RemoteClient<'a> {
             chat_url,
             secret,
         })
+    }
+
+    pub fn profile(&self) -> &RemoteProfile {
+        &self.profile
+    }
+
+    /// Verifies that session-level consent has been explicitly granted before
+    /// transmitting local document text upstream to this remote profile.
+    pub fn verify_document_consent(
+        &self,
+        tracker: &DocumentConsentTracker,
+    ) -> Result<(), RemoteError> {
+        if tracker.has_consent(&self.profile) {
+            Ok(())
+        } else {
+            Err(RemoteError::DocumentConsentRequired)
+        }
     }
 
     fn request(
@@ -754,5 +804,24 @@ mod tests {
             let profile = RemoteProfile::new("private", address, "model", false).unwrap();
             assert!(ResolvedEndpoint::resolve(&profile).is_ok());
         }
+    }
+
+    #[test]
+    fn document_consent_tracker_is_destination_bound() {
+        let mut tracker = DocumentConsentTracker::new();
+        let profile1 =
+            RemoteProfile::new("office", "https://api.example.com/v1", "model-a", false).unwrap();
+        let profile2 =
+            RemoteProfile::new("cloud", "https://api.other.com/v1", "model-b", false).unwrap();
+
+        assert!(!tracker.has_consent(&profile1));
+        assert!(!tracker.has_consent(&profile2));
+
+        tracker.grant_consent(&profile1);
+        assert!(tracker.has_consent(&profile1));
+        assert!(!tracker.has_consent(&profile2));
+
+        tracker.clear();
+        assert!(!tracker.has_consent(&profile1));
     }
 }

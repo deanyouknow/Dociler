@@ -1313,6 +1313,8 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                 bind_addr: addr,
                 active_model: None,
                 model_status: ModelHealthStatus::Unloaded,
+                router: None,
+                local_chat_enabled: false,
             };
             let token = generate_bearer_token().map_err(CommandError::Output)?;
             let gateway = start_gateway(config, token).map_err(CommandError::Output)?;
@@ -2339,6 +2341,9 @@ fn main() -> ExitCode {
                     }
                     RemoteError::ResponseLimit => {
                         "remote response exceeded Dociler's safety limit."
+                    }
+                    RemoteError::DocumentConsentRequired => {
+                        "transmitting local document content upstream requires explicit destination consent."
                     }
                     RemoteError::Cancelled => "remote response was cancelled.",
                     RemoteError::Output => "output failed while streaming the remote response.",
