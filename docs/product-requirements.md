@@ -125,3 +125,15 @@ service should stop or continue as a user-level background process.
   per-operation confirmation.
 - Another OpenAI-compatible client can list the Dociler alias and stream a chat
   completion through the authenticated gateway.
+
+## Post-v1 roadmap
+
+Features explicitly deferred from v1 that may be considered in post-v1 releases:
+
+- **Spreadsheets and structured data:** Ingestion of `.xlsx`, `.csv`, and `.tsv` with tabular querying.
+- **Presentations:** Slide deck ingestion for `.pptx` and `.odp`.
+- **OCR extension pack:** Optional plugin for local OCR on image-only/scanned PDFs and scanned pages.
+- **Connectors & Web:** Read-only ingestion for web URLs, Google Docs, and Model Context Protocol (MCP) servers.
+- **Persistent RAG & embeddings:** Optional opt-in persistent vector indexes with user-controlled storage.
+- **Custom skill definitions:** Sandboxed, declarative user/workspace skills beyond built-in modules.
+- **Docker distribution:** Standard OCI container image for headless server deployments.

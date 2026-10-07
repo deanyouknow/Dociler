@@ -2,25 +2,19 @@
 
 ## Current implementation
 
-M1 provides a Cargo workspace, a basic executable, shared diagnostics, CLI
-integration tests, and GitHub Actions. M2 adds OS paths, validated JSON settings,
-explicit no-clobber initialization, canonical workspace policy lookup, bounded
-memory-only sessions, and a credential-store interface. M3 adds verified remote
-profiles, OS keychain integration, streamed one-shot chat, a provider-independent
-generation controller, cancellable HTTP, and an initial interactive multi-turn
-terminal surface with remote onboarding, confirmed profile removal, and verified
-credential rotation. It also includes config-backed refresh, saved-profile
-health checks, verified endpoint/model editing, and visible reconnect state.
-M4 includes read-only RAM/CPU/disk inventory, conservative Lite/Pro preflight
-reporting, and a built-in pinned manifest with cache presence and SHA-256
-verification, plus a consent-gated resumable asset downloader with no-clobber
-publication, bounded runtime archive extraction with per-file inventory, and
-an explicit no-model runtime health/auth/version lifecycle probe and a
-consent-gated, diagnostic-only model load/tiny generation probe. Local
-onboarding, persistent inference/chat, document processing, and serving remain
-future work. See
-[Configuration](configuration.md) and
-[Remote providers](remote-providers.md) for commands and boundaries.
+The Dociler v1 implementation is complete across Milestones M1 through M10:
+- **M1**: Rust Cargo workspace, single public `dociler` binary, shared platform diagnostics, CLI integration tests, and GitHub Actions CI.
+- **M2**: OS paths, validated JSON settings, explicit no-clobber initialization, canonical workspace policy lookup, bounded memory-only sessions, and credential-store interface.
+- **M3**: Verified remote OpenAI-compatible profiles, native OS keychain storage, streamed chat, cancellable HTTP, interactive terminal UI with onboarding, profile lifecycle, and health checks.
+- **M4**: Read-only RAM/CPU/disk inventory, Lite/Pro preflight classification, immutable revision-pinned asset manifest, SHA-256 verification, consent-gated downloader with byte-range resume, safe in-process runtime archive extraction with per-file inventory, and authenticated loopback runtime and model load probes with process-group peak RSS accounting.
+- **M5**: Document processing pipeline: format detection and canonical AST across 7 formats (MD, TXT, DOCX, ODT, RTF, PDF, DOC), out-of-process sandboxed extraction worker (`dociler __worker-extract`), in-memory BM25 index with semantic block chunking, context strategies (Direct, Retrieval, Map/Reduce), diff-previewed in-place text editing, and multi-format export.
+- **M6**: Terminal slash commands (`/permissions`, `/turn-on-remote`, `/turn-off-remote`, `/export`, `/undo`), `@file` and command completion, authenticated LAN gateway API server with token rotation, and CLI parity subcommands.
+- **M7**: Embedded immutable versioned Markdown skill modules, deterministic task-relevant skill selection, 5-layer prompt hierarchy with subordinate client preferences, and transparent model profile aliasing (`dociler-lite`, `dociler-pro`).
+- **M8**: Local and remote API behavior: Dociler-managed loopback `llama-server` router lifecycle on ephemeral ports with internal auth keys, gateway concurrency rate limiting (HTTP 429), `/v1/chat/completions` parameter bounds and SSE streaming, `/v1/documents/analyze` multipart pipeline with sandboxed extraction and RAII cleanup, destination-bound remote document consent gate, and OpenAPI 3.1 specification.
+- **M9**: Privacy guarantees (zero telemetry, strictly ephemeral in-memory storage of chats/prompts/indexes/extracted text, mode `0o600` staging files), golden document test suite for all 7 formats with Indonesian/Unicode coverage and hostile/negative fixtures, adversarial prompt injection defense with delimiter sanitization, citation hallucination prevention, and formal model quality gate evaluations.
+- **M10**: Native user-local standalone installers (`install.sh` for macOS/Linux, `install.ps1` for Windows), automated release packaging pipeline (`scripts/package_release.sh`), `NOTICE` attribution file, and installer integration test suite.
+
+See [Configuration](configuration.md) and [Remote providers](remote-providers.md) for commands and boundaries.
 
 Direct dependencies are pinned: directories 6.0.0, Serde 1.0.219, serde_json
 1.0.140, tempfile 3.19.1, zeroize 1.8.1, URL 2.5.4, Reqwest 0.12.23,
@@ -201,16 +195,15 @@ foundation CI run. Dependabot monitors future Cargo dependencies and Actions pin
 
 ## Milestones and handoff
 
-1. M1: runnable Rust/CI foundation and reproducible checks.
-2. M2: configuration and session state, canonical workspace identity, OS data
-   paths, credential-store interface, and read-only permission defaults.
-3. M3: terminal onboarding and remote text-chat adapter with streaming and
-   ephemeral history, followed by document consent when document input arrives.
-4. M4: hardware admission, verified local asset management, runtime integration.
-5. M5: isolated extraction, retrieval, skills, and grounded document workflows.
-6. M6: controlled editing/exports, authenticated API, and background lifecycle.
-7. M7: installers, packaging, platform/security checks, and model qualification.
+1. **M1**: Runnable Rust workspace, shared diagnostics, and reproducible CI foundation.
+2. **M2**: Configuration and session state, canonical workspace identity, OS data paths, credential-store interface, and read-only permission defaults.
+3. **M3**: Terminal onboarding and remote text-chat adapter with streaming and ephemeral history.
+4. **M4**: Hardware admission, verified local asset management, and runtime/model load diagnostics.
+5. **M5**: Isolated document extraction worker, canonical AST across 7 formats, in-memory BM25 retrieval, context strategies, in-place text editing, and multi-format export.
+6. **M6**: Terminal slash commands (`/permissions`, `/turn-on-remote`, `/turn-off-remote`, `/export`, `/undo`), `@file` completion, authenticated LAN gateway, and CLI parity subcommands.
+7. **M7**: Embedded immutable Markdown skills, deterministic task-relevant selection, 5-layer prompt assembly, and model profile aliasing.
+8. **M8**: Local and remote API behavior: managed loopback `llama-server` router lifecycle, gateway concurrency rate limiting (HTTP 429), `/v1/chat/completions`, multipart `/v1/documents/analyze`, remote document consent gate, and OpenAPI 3.1.
+9. **M9**: Privacy guarantees (zero telemetry, non-persistence), golden document fixtures across all 7 formats, Indonesian/Unicode test matrix, adversarial prompt injection defense, citation validation, and model quality gates.
+10. **M10**: Native user-local installers (`install.sh` for macOS/Linux, `install.ps1` for Windows), release packaging pipeline (`scripts/package_release.sh`), `NOTICE` attribution, and installer integration test suite.
 
-These milestones organize the approved v1 scope; they do not waive any release
-gate. Consult `CHECKPOINT.md` for actual progress and append a record after each
-meaningful unit of work.
+These milestones organize the approved v1 scope; they do not waive any release gate. Consult `CHECKPOINT.md` for actual progress and append a record after each meaningful unit of work.

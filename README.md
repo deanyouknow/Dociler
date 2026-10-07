@@ -4,25 +4,18 @@ Dociler is a local-first terminal assistant in development for reading, searchin
 comparing, summarizing, and drafting universal documents with either a local
 LLM or a user-configured OpenAI-compatible API.
 
-> **Project status:** Implementation has begun. The Rust CLI foundation provides
-> help, version, workspace diagnostics, and validated settings with explicit
-> initialization. Remote OpenAI-compatible profile verification and streamed
-> one-shot text chat are available. An initial memory-only, multi-turn terminal
-> interface, remote-profile onboarding, refresh and connection checks, verified
-> endpoint/model editing, confirmed profile removal, and verified key rotation
-> are also available. Read-only RAM/CPU/disk inventory and conservative Lite/Pro
-> preflight reporting are available through `model status`. A built-in,
-> revision-pinned asset manifest and read-only cache listing/SHA-256 verification
-> are available through `model list` and `model verify`. Explicitly confirmed,
-> resumable model/runtime downloads are available through `model download`; all
-> bytes are size/checksum verified before no-clobber publication. Verified
-> runtime archives can be safely extracted and inventoried through
-> `model runtime-install`. `model runtime-probe --confirm` can reverify the
-> install, briefly start a model-free authenticated loopback router, and stop it.
-> `model load-probe PROFILE --confirm` can reverify a cached GGUF/runtime,
-> perform a short CPU-only model load and test generation, then stop it. This
-> diagnostic does not enable local chat, qualify memory/quality, or admit a
-> backend. Local onboarding and document analysis are not implemented.
+> **Project status:** v1 implementation is complete across Milestones M1 through
+> M10. The native Rust executable (`dociler`) provides full document processing for
+> 7 supported formats (MD, TXT, DOCX, ODT, RTF, PDF, DOC), out-of-process sandboxed
+> extraction, in-memory BM25 indexing, 5-layer prompt assembly with adversarial
+> injection defense, embedded immutable skills, terminal interactive chat with
+> slash commands and @file completion, controlled in-place editing and multi-format
+> export, authenticated LAN gateway API (/v1/chat/completions, /v1/documents/analyze,
+> OpenAPI 3.1), managed loopback llama-server router lifecycle with concurrency
+> rate limiting, strict privacy guarantees (zero telemetry, zero persistence of
+> chats/prompts/indexes), model quality qualification gates, and user-local native
+> installers (`install.sh`, `install.ps1`). Local model chat remains qualification-gated
+> pending full-context memory and model quality certification.
 
 The first release is scoped to word-processing documents: Markdown (`.md`),
 PDF (`.pdf`), modern and legacy Word (`.docx`, `.doc`), Rich Text Format
