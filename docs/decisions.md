@@ -594,3 +594,36 @@ destructive operations.
 **Why:** Workspace files belong to the user and must be safeguarded against accidental corruption, unprompted overwrites, or data loss. Direct binary modification of complex formats (.docx, .pdf, .odt) easily leads to document corruption; restricting in-place edits to text-based formats with diff previews and atomic replacement ensures file integrity. In-memory session undo allows quick recovery during interactive chat without persisting user draft history to disk. Providing compliant DOCX, RTF, and ODT exports allows users to generate structured documents from canonical AST representations without requiring external office suites or runtime dependencies.
 
 **Rejected:** In-place modification of binary or legacy office documents; disk-persisted undo logs or backup files; non-atomic file truncation or writing directly to target paths; allowing export writes outside the workspace boundary; silent overwriting of original binary sources.
+
+## ADR-035: Terminal experience, workspace permissions, authenticated LAN gateway, export commands, and session undo
+
+**Decision:** Complete Milestone M6 terminal slash commands, autocompletion, authenticated local-network gateway, and CLI parity subcommands:
+1. **Interactive Workspace Permissions Management:**
+   - Implement `/permissions` TUI slash command and scriptable `dociler permissions [PATH] [--grant|--revoke]` CLI subcommand.
+   - Enabling a write grant persists the canonical workspace root in configuration (`settings.write_workspaces`), displays the normalized path, and explicitly warns that every in-place mutation or export still requires preview and confirmation.
+   - Revoking a write grant immediately restores default `ReadOnly` mode.
+   - The TUI header dynamically displays the current policy as `read-only` or `write-enabled`.
+2. **Authenticated Local-Network API Gateway:**
+   - Implement `/turn-on-remote` and `/turn-off-remote` TUI slash commands and scriptable `dociler serve [--port PORT]` CLI subcommand.
+   - Server binds to `0.0.0.0:11435` (or configured port) on explicit demand; default state remains off.
+   - Generate cryptographically secure 256-bit hex bearer tokens via OS entropy (`getrandom`). Enforce constant-time token verification to mitigate side-channel timing attacks. Require bearer token authentication for all `/v1/*` endpoints (`/v1/models`, `/v1/chat/completions`, `/v1/documents/analyze`).
+   - Allow unauthenticated `GET /healthz` exposing high-level status without leaking internal paths or secrets.
+   - Expose OpenAPI 3.1 specification at `GET /openapi.json`.
+   - Support token rotation (`/turn-on-remote rotate`) immediately invalidating previous credentials.
+   - Support graceful cooperative shutdown on `/turn-off-remote` or process exit.
+   - The TUI header dynamically displays the gateway state as `API off` or `API on (11435)`.
+3. **Canonical AST Document Export Integration:**
+   - Implement `/export FORMAT DEST [SRC]` TUI slash command and scriptable `dociler export FORMAT DEST [SOURCE] [--confirm]` CLI subcommand.
+   - Exports can target Markdown (`.md`), PlainText (`.txt`), Word (`.docx`), Rich Text Format (`.rtf`), or OpenDocument (`.odt`).
+   - Require an active workspace write grant; fail closed if workspace is in `ReadOnly` mode.
+   - Follow the mandatory preview-and-confirmation sequence: display format, target destination, and block count; require explicit `/export confirm DEST` or `--confirm` flag before writing.
+   - Enforce workspace containment and refusal to overwrite binary source documents.
+4. **In-Memory Ephemeral Session Undo:**
+   - Implement `/undo [PATH]` TUI slash command to revert the most recent in-place text edit or targeted file path using `SessionUndoStack`.
+   - Reverts restore previous content atomically via temporary files and are dropped upon exit, leaving zero disk residue.
+5. **Interactive Multiline Composer Autocomplete:**
+   - multiline composer handles `Tab` key completion for `/` slash commands (e.g., `/help`, `/status`, `/model`, `/connect`, `/files`, `/clear`, `/permissions`, `/export`, `/turn-on-remote`, `/turn-off-remote`, `/undo`, `/exit`) and `@file` document references matching workspace documents discovered during startup.
+
+**Why:** A complete terminal assistant requires intuitive in-composer discoverability (`Tab` completion for commands and workspace files), clear indicators of write permissions and API state in the header, safe mutation workflows (preview, confirmation, and memory undo), and secure, zero-config LAN sharing with cryptographically random tokens and constant-time auth verification.
+
+**Rejected:** Allowing workspace writes without explicit preview and confirmation; storing bearer tokens in plaintext configuration files; binding LAN gateway by default without explicit user consent; persisting undo stacks to disk; enabling local chat before memory and quality qualification gates pass.

@@ -104,6 +104,10 @@ impl Settings {
         self.preferred_local_profile
     }
 
+    pub fn write_workspaces(&self) -> &[PathBuf] {
+        &self.write_workspaces
+    }
+
     pub fn write_policy(&self, workspace: &Workspace) -> WritePolicy {
         // Exact canonical identity only; no parent/child inheritance and no
         // re-canonicalization of stored aliases that could retarget an old grant.
@@ -116,6 +120,28 @@ impl Settings {
         } else {
             WritePolicy::ReadOnly
         }
+    }
+
+    pub fn grant_workspace_write(&mut self, workspace: &Workspace) -> io::Result<bool> {
+        if self
+            .write_workspaces
+            .iter()
+            .any(|root| root == workspace.root())
+        {
+            return Ok(false);
+        }
+        if self.write_workspaces.len() >= 256 {
+            return Err(invalid_config());
+        }
+        self.write_workspaces.push(workspace.root().to_path_buf());
+        Ok(true)
+    }
+
+    pub fn revoke_workspace_write(&mut self, workspace: &Workspace) -> bool {
+        let initial_len = self.write_workspaces.len();
+        self.write_workspaces
+            .retain(|root| root != workspace.root());
+        self.write_workspaces.len() < initial_len
     }
 
     pub fn remote_profiles(&self) -> &[RemoteProfile] {

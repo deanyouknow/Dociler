@@ -1,4 +1,5 @@
 use std::io;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Duration;
@@ -18,8 +19,16 @@ use dociler_core::assets::{
 use dociler_core::chat::{
     CancellationToken, ChatError, Generation, GenerationEvent, GenerationPoll, RemoteChatBackend,
 };
-use dociler_core::config::LocalProfile;
-use dociler_core::credentials::{CredentialError, Secret};
+use dociler_core::config::{ConfigStore, LocalProfile};
+use dociler_core::credentials::{
+    CredentialError, CredentialId, CredentialStore, OsCredentialStore, Secret,
+};
+use dociler_core::document::{
+    Block as DocBlock, Document, DocumentFormat, DocumentMetadata, DocumentSource, InlineRun,
+    SourceAnchor,
+};
+use dociler_core::editing::SessionUndoStack;
+use dociler_core::export::{ExportFormat, export_document};
 use dociler_core::hardware::{HardwareInventory, ModelPreflight, PreflightStatus};
 use dociler_core::paths::AppPaths;
 use dociler_core::profiles::{
@@ -28,9 +37,13 @@ use dociler_core::profiles::{
     remove_remote_profile, rotate_remote_credential,
 };
 use dociler_core::remote::{RemoteError, RemoteProfile};
+use dociler_core::remote_serve::{
+    DEFAULT_GATEWAY_PORT, GatewayConfig, GatewayHandle, ModelHealthStatus, generate_bearer_token,
+    start_gateway,
+};
 use dociler_core::runtime_install::{RuntimeInstallState, inspect_installed_runtime};
 use dociler_core::session::Session;
-use dociler_core::workspace::Workspace;
+use dociler_core::workspace::{Workspace, WritePolicy};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -160,6 +173,13 @@ enum ConnectionStatus {
     Failed(String),
 }
 
+struct PendingExport {
+    format: ExportFormat,
+    destination: PathBuf,
+    document: Document,
+    _source_name: String,
+}
+
 pub struct App {
     workspace: Workspace,
     paths: AppPaths,
@@ -182,6 +202,10 @@ pub struct App {
     pending_model_repair: Option<LocalProfile>,
     connection_status: ConnectionStatus,
     active_local: Option<LocalProfile>,
+    undo_stack: SessionUndoStack,
+    last_edited_path: Option<PathBuf>,
+    pending_export: Option<PendingExport>,
+    gateway_server: Option<GatewayHandle>,
     quit: bool,
 }
 
@@ -217,6 +241,10 @@ impl App {
             pending_model_repair: None,
             connection_status: ConnectionStatus::Unknown,
             active_local: None,
+            undo_stack: SessionUndoStack::new(),
+            last_edited_path: None,
+            pending_export: None,
+            gateway_server: None,
             quit: false,
         };
         app.notice("Welcome to Dociler. Text chat is memory-only; documents and local models are not active.");
@@ -243,6 +271,20 @@ impl App {
     fn active_profile_is(&self, name: &str) -> bool {
         self.selected_profile()
             .is_some_and(|profile| profile.name() == name)
+    }
+
+    pub fn current_write_policy(&self) -> WritePolicy {
+        let store = ConfigStore::new(self.paths.clone());
+        match store.load() {
+            Ok(loaded) => loaded.settings.write_policy(&self.workspace),
+            Err(_) => WritePolicy::ReadOnly,
+        }
+    }
+
+    pub fn shutdown_services(&mut self) {
+        if let Some(server) = self.gateway_server.take() {
+            server.shutdown();
+        }
     }
 
     fn notice(&mut self, text: impl Into<String>) {
@@ -727,14 +769,30 @@ impl App {
         let command = parts.next().unwrap_or("");
         match command {
             "/help" => self.notice(
-                "/help  /status  /model [list|status|info PROFILE|use PROFILE|unload|remove TARGET|repair PROFILE]  /connect [NAME|add|refresh|check NAME|edit NAME|remove NAME|key NAME]  /clear  /exit\nProfile edits, keys, removal, and cache operations require exact repetition when prompted. Esc cancels active work; PageUp/PageDown scroll.",
+                "/help  /status  /files  /permissions [grant|revoke]  /export FORMAT DEST [SRC]  /undo [PATH]  /turn-on-remote  /turn-off-remote  /model [list|status|info|use|unload|remove|repair]  /connect [NAME|add|refresh|check|edit|remove|key]  /clear  /exit\nUse Tab for @file or slash-command completion. Exports and writes require confirmed permissions. Esc cancels active work; PageUp/PageDown scroll.",
             ),
             "/status" => {
+                let write_policy = self.current_write_policy();
+                let write_text = match write_policy {
+                    WritePolicy::ReadOnly => "read-only (writes disabled)",
+                    WritePolicy::ConfirmEveryWrite => "confirm-every-write (writes enabled)",
+                };
+                let api_text = if let Some(server) = &self.gateway_server {
+                    if server.is_running() {
+                        format!("on (http://{})", server.bound_addr())
+                    } else {
+                        "off".to_string()
+                    }
+                } else {
+                    "off".to_string()
+                };
                 let status_text = if let Some(local) = self.active_local {
                     format!(
-                        "Workspace: {}\nBackend: Local\nProfile: {}\nStatus: diagnostic only (local chat disabled pending release qualification)\nAccess: read-only\nHistory: memory-only\nLAN API: off",
+                        "Workspace: {}\nBackend: Local\nProfile: {}\nStatus: diagnostic only (local chat disabled pending release qualification)\nAccess: {}\nHistory: memory-only\nLAN API: {}",
                         safe_path(self.workspace.root()),
-                        local.alias()
+                        local.alias(),
+                        write_text,
+                        api_text
                     )
                 } else {
                     let profile = self
@@ -742,9 +800,11 @@ impl App {
                         .map(|profile| format!("{} ({})", profile.name(), profile.model()))
                         .unwrap_or_else(|| "none".to_owned());
                     format!(
-                        "Workspace: {}\nBackend: Remote\nProfile: {profile}\nConnection: {}\nAccess: read-only\nHistory: memory-only\nLAN API: off",
+                        "Workspace: {}\nBackend: Remote\nProfile: {profile}\nConnection: {}\nAccess: {}\nHistory: memory-only\nLAN API: {}",
                         safe_path(self.workspace.root()),
-                        self.connection_status_text()
+                        self.connection_status_text(),
+                        write_text,
+                        api_text
                     )
                 };
                 self.notice(status_text);
@@ -893,9 +953,157 @@ impl App {
                     self.error(format!("Failed to discover documents: {err}"));
                 }
             },
-            "/permissions" | "/export" | "/turn-on-remote"
-            | "/turn-off-remote" | "/update" => self.error(
-                "That command is planned but unavailable in this text-only milestone.",
+            "/permissions" => {
+                let arguments = parts.collect::<Vec<_>>();
+                match arguments.as_slice() {
+                    [] => {
+                        let policy = self.current_write_policy();
+                        let canonical_path = safe_path(self.workspace.root());
+                        let (state_label, action_hint) = match policy {
+                            WritePolicy::ReadOnly => (
+                                "disabled (read-only)",
+                                "Use '/permissions grant' to enable write access.\n(The grant persists for this workspace in settings. Every write still requires a preview and explicit confirmation.)",
+                            ),
+                            WritePolicy::ConfirmEveryWrite => (
+                                "enabled (confirm-every-write)",
+                                "Use '/permissions revoke' to disable write access.\n(Every write operation requires a diff/format preview and explicit confirmation.)",
+                            ),
+                        };
+                        self.notice(format!(
+                            "Workspace write permissions:\n  Canonical path: {canonical_path}\n  Current policy: {state_label}\n\n{action_hint}"
+                        ));
+                    }
+                    ["grant"] | ["enable"] => {
+                        let store = ConfigStore::new(self.paths.clone());
+                        match store.load() {
+                            Ok(loaded) => {
+                                let mut settings = loaded.settings;
+                                match settings.grant_workspace_write(&self.workspace) {
+                                    Ok(granted) => {
+                                        if let Err(err) = store.save(&settings) {
+                                            self.error(format!("Failed to save settings: {err}"));
+                                        } else if granted {
+                                            self.notice(format!(
+                                                "Workspace write grant enabled for canonical workspace:\n  {}\nThe grant persists for this workspace in settings. Every write still requires a diff preview and explicit confirmation before any file is modified.",
+                                                safe_path(self.workspace.root())
+                                            ));
+                                        } else {
+                                            self.notice(format!(
+                                                "Workspace write grant was already enabled for:\n  {}",
+                                                safe_path(self.workspace.root())
+                                            ));
+                                        }
+                                    }
+                                    Err(_) => {
+                                        self.error("Maximum number of workspace write grants (256) reached.");
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                self.error(format!("Failed to load configuration: {err}"));
+                            }
+                        }
+                    }
+                    ["revoke"] | ["disable"] => {
+                        let store = ConfigStore::new(self.paths.clone());
+                        match store.load() {
+                            Ok(loaded) => {
+                                let mut settings = loaded.settings;
+                                let revoked = settings.revoke_workspace_write(&self.workspace);
+                                if let Err(err) = store.save(&settings) {
+                                    self.error(format!("Failed to save settings: {err}"));
+                                } else if revoked {
+                                    self.notice(format!(
+                                        "Workspace write grant revoked for:\n  {}\nWorkspace is now read-only.",
+                                        safe_path(self.workspace.root())
+                                    ));
+                                } else {
+                                    self.notice(format!(
+                                        "Workspace was already read-only:\n  {}",
+                                        safe_path(self.workspace.root())
+                                    ));
+                                }
+                            }
+                            Err(err) => {
+                                self.error(format!("Failed to load configuration: {err}"));
+                            }
+                        }
+                    }
+                    _ => {
+                        self.error("Usage: /permissions, /permissions grant, or /permissions revoke");
+                    }
+                }
+            }
+            "/turn-on-remote" => {
+                if let Some(server) = &self.gateway_server {
+                    if server.is_running() {
+                        let token = server.current_token();
+                        self.notice(format!(
+                            "LAN gateway server is already running on http://{}.\nBearer token: {}\nUse /turn-off-remote to stop.",
+                            server.bound_addr(),
+                            token.as_str()
+                        ));
+                        return;
+                    }
+                }
+
+                match generate_bearer_token() {
+                    Ok(token) => {
+                        let token_str = token.clone();
+                        if let Ok(cred_id) = CredentialId::new("dociler-gateway") {
+                            let _ = OsCredentialStore.set(&cred_id, &Secret::new(token_str.to_string()));
+                        }
+
+                        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], DEFAULT_GATEWAY_PORT));
+                        let config = GatewayConfig {
+                            bind_addr: addr,
+                            active_model: self.active_local,
+                            model_status: if self.active_local.is_some() {
+                                ModelHealthStatus::Ready
+                            } else {
+                                ModelHealthStatus::Unloaded
+                            },
+                        };
+
+                        match start_gateway(config, token) {
+                            Ok(handle) => {
+                                let bound = handle.bound_addr();
+                                self.gateway_server = Some(handle);
+                                self.notice(format!(
+                                    "LAN gateway server started on http://{bound}\nBearer token: {}\nWarning: Dociler does not configure firewalls, routers, or internet TLS. Use only on a trusted private network.",
+                                    token_str.as_str()
+                                ));
+                            }
+                            Err(err) => {
+                                self.error(format!(
+                                    "Failed to start LAN gateway on port {DEFAULT_GATEWAY_PORT}: {err}. Ensure the port is not already in use."
+                                ));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        self.error(format!("Failed to generate secure bearer token: {err}"));
+                    }
+                }
+            }
+            "/turn-off-remote" => {
+                if let Some(server) = self.gateway_server.take() {
+                    server.shutdown();
+                    self.notice("LAN gateway server stopped.");
+                } else {
+                    self.notice("LAN gateway server is not running.");
+                }
+            }
+            "/export" => {
+                let arguments = parts.collect::<Vec<_>>();
+                self.handle_export_command(&arguments);
+            }
+            "/undo" => {
+                let arguments = parts.collect::<Vec<_>>();
+                self.handle_undo_command(&arguments);
+            }
+            "/update" => self.error(
+                "Update checks and package installations are planned for a subsequent release.",
             ),
             _ => self.error("Unknown command. Use /help."),
         }
@@ -1264,6 +1472,381 @@ impl App {
         self.notice(text);
     }
 
+    fn handle_export_command(&mut self, arguments: &[&str]) {
+        match arguments {
+            [] => {
+                self.notice(
+                    "Usage: /export FORMAT DEST_PATH [SOURCE_PATH]\nFormats: md, txt, docx, rtf, odt\nExamples:\n  /export docx export.docx\n  /export md notes.md input.docx\nExports require workspace write grant and preview confirmation via '/export confirm DEST_PATH'.",
+                );
+            }
+            ["confirm", dest_str] => {
+                let target = PathBuf::from(dest_str);
+                let Some(pending) = self.pending_export.take() else {
+                    self.error("No pending export to confirm. Use /export FORMAT DEST_PATH [SOURCE_PATH] to create a preview first.");
+                    return;
+                };
+
+                if pending.destination != target {
+                    self.error(format!(
+                        "Destination mismatch: pending export is for '{}', not '{}'.",
+                        pending.destination.display(),
+                        target.display()
+                    ));
+                    self.pending_export = Some(pending);
+                    return;
+                }
+
+                if self.current_write_policy() == WritePolicy::ReadOnly {
+                    self.error("Workspace is read-only. Use '/permissions grant' to enable write access before exporting.");
+                    return;
+                }
+
+                match export_document(
+                    &self.workspace,
+                    &pending.document,
+                    pending.format,
+                    &pending.destination,
+                    false,
+                ) {
+                    Ok(report) => {
+                        let mut msg = format!(
+                            "Successfully exported to '{}' ({}, {}).",
+                            report.destination_path.display(),
+                            report.format.extension(),
+                            format_bytes(report.byte_size as u64)
+                        );
+                        if !report.warnings.is_empty() {
+                            msg.push_str("\nWarnings:\n");
+                            for w in &report.warnings {
+                                msg.push_str(&format!("  - {w}\n"));
+                            }
+                        }
+                        self.notice(msg);
+                    }
+                    Err(err) => {
+                        self.error(format!("Export failed: {err}"));
+                    }
+                }
+            }
+            [format_str, dest_str] | [format_str, dest_str, _] => {
+                let format = match *format_str {
+                    "md" | "markdown" => Some(ExportFormat::Markdown),
+                    "txt" | "text" => Some(ExportFormat::PlainText),
+                    "docx" => Some(ExportFormat::Docx),
+                    "rtf" => Some(ExportFormat::Rtf),
+                    "odt" => Some(ExportFormat::Odt),
+                    _ => None,
+                };
+
+                let Some(export_fmt) = format else {
+                    self.error(format!(
+                        "Unknown export format '{format_str}'. Supported formats: md, txt, docx, rtf, odt"
+                    ));
+                    return;
+                };
+
+                let dest_path = PathBuf::from(*dest_str);
+                let source_path_opt = arguments.get(2).map(|s| PathBuf::from(*s));
+
+                let (doc, source_name) = if let Some(src_path) = source_path_opt {
+                    let full_src = if src_path.is_relative() {
+                        self.workspace.root().join(&src_path)
+                    } else {
+                        src_path.clone()
+                    };
+
+                    if !full_src.exists() {
+                        self.error(format!(
+                            "Source document '{}' does not exist.",
+                            src_path.display()
+                        ));
+                        return;
+                    }
+
+                    let bytes = match std::fs::read(&full_src) {
+                        Ok(b) => b,
+                        Err(err) => {
+                            self.error(format!(
+                                "Failed to read source document '{}': {err}",
+                                src_path.display()
+                            ));
+                            return;
+                        }
+                    };
+
+                    let doc_fmt =
+                        DocumentFormat::from_path(&full_src).unwrap_or(DocumentFormat::PlainText);
+                    let parsed_doc = match doc_fmt {
+                        DocumentFormat::Markdown => dociler_core::document::parse_markdown(
+                            &src_path.to_string_lossy(),
+                            &bytes,
+                        )
+                        .map_err(|e| e.to_string()),
+                        DocumentFormat::PlainText => dociler_core::document::parse_plain_text(
+                            &src_path.to_string_lossy(),
+                            &bytes,
+                        )
+                        .map_err(|e| e.to_string()),
+                        _ => {
+                            let limits = dociler_core::extractor::ExtractionLimits::default();
+                            let cancel = CancellationToken::new();
+                            match dociler_core::extractor::extract_document_sandboxed(
+                                &full_src,
+                                &limits,
+                                Some(&cancel),
+                            ) {
+                                Ok(doc) => Ok(doc),
+                                Err(err) => {
+                                    self.error(format!("Failed to extract source document: {err}"));
+                                    return;
+                                }
+                            }
+                        }
+                    };
+
+                    match parsed_doc {
+                        Ok(d) => (d, src_path.to_string_lossy().to_string()),
+                        Err(err) => {
+                            self.error(format!("Failed to parse source document: {err}"));
+                            return;
+                        }
+                    }
+                } else {
+                    if self.transcript.is_empty() {
+                        self.error("No active conversation transcript to export. Specify a source document: /export FORMAT DEST SOURCE");
+                        return;
+                    }
+                    (
+                        self.document_from_transcript(),
+                        "active conversation transcript".to_string(),
+                    )
+                };
+
+                let block_count = doc.blocks.len();
+                let dest_display = dest_path.display().to_string();
+                self.pending_export = Some(PendingExport {
+                    format: export_fmt,
+                    destination: dest_path.clone(),
+                    document: doc,
+                    _source_name: source_name.clone(),
+                });
+
+                self.notice(format!(
+                    "Export preview for '{dest_display}':\n  Format: {:?}\n  Source: {source_name}\n  Blocks: {block_count}\nRepeat '/export confirm {dest_display}' to write the exported document.",
+                    export_fmt
+                ));
+            }
+            _ => {
+                self.error(
+                    "Usage: /export FORMAT DEST_PATH [SOURCE_PATH] or /export confirm DEST_PATH",
+                );
+            }
+        }
+    }
+
+    fn document_from_transcript(&self) -> Document {
+        let mut blocks = Vec::new();
+        let mut block_index = 0;
+        blocks.push(DocBlock::Heading {
+            level: 1,
+            runs: vec![InlineRun::Text("Dociler Export".to_string())],
+            anchor: SourceAnchor {
+                page: None,
+                section: Some("Dociler Export".to_string()),
+                block_index,
+                line_range: None,
+            },
+        });
+        block_index += 1;
+
+        for entry in &self.transcript {
+            let (prefix, text) = match entry.kind {
+                EntryKind::User => ("User: ", entry.text.as_str()),
+                EntryKind::Assistant => ("Dociler: ", entry.text.as_str()),
+                EntryKind::Notice => ("Notice: ", entry.text.as_str()),
+                EntryKind::Error => ("Error: ", entry.text.as_str()),
+            };
+            for paragraph in text.split("\n\n") {
+                let trimmed = paragraph.trim();
+                if !trimmed.is_empty() {
+                    blocks.push(DocBlock::Paragraph {
+                        runs: vec![
+                            InlineRun::Strong(prefix.to_string()),
+                            InlineRun::Text(trimmed.to_string()),
+                        ],
+                        anchor: SourceAnchor {
+                            page: None,
+                            section: None,
+                            block_index,
+                            line_range: None,
+                        },
+                    });
+                    block_index += 1;
+                }
+            }
+        }
+
+        let source = DocumentSource::from_bytes(
+            "transcript_export",
+            DocumentFormat::Markdown,
+            b"Dociler Export",
+        );
+        Document::new(source, DocumentMetadata::default(), blocks)
+    }
+
+    fn handle_undo_command(&mut self, arguments: &[&str]) {
+        let target = match arguments {
+            [] => self.last_edited_path.clone(),
+            [path_str] => Some(PathBuf::from(*path_str)),
+            _ => {
+                self.error("Usage: /undo [PATH]");
+                return;
+            }
+        };
+
+        let Some(target_path) = target else {
+            self.notice("No edited file to undo in this session.");
+            return;
+        };
+
+        if self.current_write_policy() == WritePolicy::ReadOnly {
+            self.error("Workspace is read-only. Use '/permissions grant' to enable write access before undoing edits.");
+            return;
+        }
+
+        match dociler_core::editing::undo_edit(&self.workspace, &target_path, &mut self.undo_stack)
+        {
+            Ok(()) => {
+                self.notice(format!(
+                    "Restored previous content for '{}' from session-memory undo stack.",
+                    target_path.display()
+                ));
+            }
+            Err(err) => {
+                self.error(format!("Undo failed: {err}"));
+            }
+        }
+    }
+
+    fn handle_tab_completion(&mut self) {
+        let current_input = self.input.as_str();
+        if current_input.starts_with('/') && !current_input.contains(' ') {
+            let available_commands = [
+                "/help",
+                "/status",
+                "/files",
+                "/permissions",
+                "/export",
+                "/undo",
+                "/turn-on-remote",
+                "/turn-off-remote",
+                "/model",
+                "/connect",
+                "/clear",
+                "/exit",
+            ];
+            let matches: Vec<&str> = available_commands
+                .iter()
+                .copied()
+                .filter(|cmd| cmd.starts_with(current_input))
+                .collect();
+            match matches.as_slice() {
+                [] => {
+                    self.notice("No matching slash commands.");
+                }
+                [single] => {
+                    self.input.zeroize();
+                    self.input.clear();
+                    self.input.push_str(single);
+                    self.input.push(' ');
+                }
+                multiple => {
+                    let common = common_prefix(multiple);
+                    if common.len() > current_input.len() {
+                        self.input.zeroize();
+                        self.input.clear();
+                        self.input.push_str(&common);
+                    }
+                    self.notice(format!("Available commands:\n  {}", multiple.join("  ")));
+                }
+            }
+            return;
+        }
+
+        if let Some(at_idx) = current_input.rfind('@') {
+            let query = &current_input[at_idx + 1..];
+            if !query.contains(' ') && !query.contains('\n') {
+                match self.workspace.discover_documents() {
+                    Ok(report) => {
+                        let candidate_files: Vec<String> = report
+                            .documents
+                            .iter()
+                            .map(|d| d.relative_path.to_string_lossy().to_string())
+                            .filter(|p| {
+                                p.starts_with(query)
+                                    || p.to_ascii_lowercase().contains(&query.to_ascii_lowercase())
+                            })
+                            .collect();
+
+                        match candidate_files.as_slice() {
+                            [] => {
+                                self.notice(format!("No workspace documents matching '@{query}'."));
+                            }
+                            [single] => {
+                                let prefix = &current_input[..at_idx];
+                                let mut new_input =
+                                    String::with_capacity(prefix.len() + 1 + single.len() + 1);
+                                new_input.push_str(prefix);
+                                new_input.push('@');
+                                new_input.push_str(single);
+                                new_input.push(' ');
+                                self.input.zeroize();
+                                self.input.clear();
+                                self.input.push_str(&new_input);
+                            }
+                            multiple => {
+                                let str_slice: Vec<&str> =
+                                    multiple.iter().map(|s| s.as_str()).collect();
+                                let common = common_prefix(&str_slice);
+                                if common.len() > query.len() {
+                                    let prefix = &current_input[..at_idx];
+                                    let mut new_input =
+                                        String::with_capacity(prefix.len() + 1 + common.len());
+                                    new_input.push_str(prefix);
+                                    new_input.push('@');
+                                    new_input.push_str(&common);
+                                    self.input.zeroize();
+                                    self.input.clear();
+                                    self.input.push_str(&new_input);
+                                }
+                                let preview_list = if multiple.len() > 8 {
+                                    format!(
+                                        "{} and {} more",
+                                        multiple[..8].join(", "),
+                                        multiple.len() - 8
+                                    )
+                                } else {
+                                    multiple.join(", ")
+                                };
+                                self.notice(format!("Matching documents: {preview_list}"));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        self.error(format!("Document discovery error: {err}"));
+                    }
+                }
+                return;
+            }
+        }
+
+        if current_input.is_empty() {
+            self.notice(
+                "Tab autocompletion: type '/' for slash commands or '@' for workspace documents.",
+            );
+        }
+    }
+
     fn start_generation(&mut self, prompt: String) {
         if let Some(local) = self.active_local {
             let name = local.alias();
@@ -1552,9 +2135,10 @@ impl App {
         match (key.code, key.modifiers) {
             (KeyCode::Char('c'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.activity == Activity::Ready {
-                    self.quit = true
+                    self.shutdown_services();
+                    self.quit = true;
                 } else {
-                    self.cancel()
+                    self.cancel();
                 }
             }
             (KeyCode::Esc, _) if self.activity != Activity::Ready => self.cancel(),
@@ -1569,6 +2153,7 @@ impl App {
                 }
             }
             (KeyCode::Enter, _) => self.submit(),
+            (KeyCode::Tab, _) if self.onboarding.is_none() => self.handle_tab_completion(),
             (KeyCode::Backspace, _) => {
                 self.input.pop();
             }
@@ -1721,6 +2306,22 @@ fn profile_mutation_error_message(error: ProfileMutationError) -> &'static str {
     }
 }
 
+fn common_prefix(items: &[&str]) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    let first = items[0];
+    let mut prefix_len = 0;
+    for (i, c) in first.char_indices() {
+        if items.iter().all(|s| s[i..].starts_with(c)) {
+            prefix_len = i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    first[..prefix_len].to_string()
+}
+
 fn safe_path(path: &std::path::Path) -> String {
     path.to_string_lossy()
         .chars()
@@ -1808,6 +2409,20 @@ fn render(frame: &mut Frame<'_>, app: &App) {
             app.connection_badge(),
         )
     };
+    let write_policy = app.current_write_policy();
+    let write_label = match write_policy {
+        WritePolicy::ReadOnly => "read-only",
+        WritePolicy::ConfirmEveryWrite => "write-enabled",
+    };
+    let api_label = if let Some(server) = &app.gateway_server {
+        if server.is_running() {
+            format!("API on ({})", server.bound_addr())
+        } else {
+            "API off".to_string()
+        }
+    } else {
+        "API off".to_string()
+    };
     let header = Paragraph::new(vec![
         Line::from(Span::styled(
             "DOCILER",
@@ -1816,7 +2431,7 @@ fn render(frame: &mut Frame<'_>, app: &App) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(format!(
-            "{backend_label} · {profile_label} · {connection_label} · read-only · memory-only · API off"
+            "{backend_label} · {profile_label} · {connection_label} · {write_label} · memory-only · {api_label}"
         )),
     ])
     .block(Block::default().borders(Borders::ALL));
@@ -1986,6 +2601,7 @@ pub fn run(
             }
         }
     }
+    app.shutdown_services();
     terminal.show_cursor()?;
     Ok(())
 }
@@ -2054,7 +2670,7 @@ mod tests {
         command(&mut app, "hello");
         assert_eq!(app.activity, Activity::Ready);
         assert!(app.generation.is_none());
-        command(&mut app, "/permissions");
+        command(&mut app, "/update");
         assert!(matches!(
             app.transcript.last().unwrap().kind,
             EntryKind::Error
@@ -2534,5 +3150,156 @@ mod tests {
         assert_eq!(app.pending_model_repair, None);
         let repair_done = app.transcript.last().unwrap().text.as_str();
         assert!(repair_done.contains("purged"));
+    }
+
+    #[test]
+    fn test_permissions_command_inspect_grant_revoke() {
+        let (dir, mut app) = app();
+        let _ = dir;
+
+        // Default: read-only
+        command(&mut app, "/permissions");
+        let last = app.transcript.last().unwrap();
+        assert!(matches!(last.kind, EntryKind::Notice));
+        assert!(last.text.contains("disabled (read-only)"));
+
+        // Grant
+        command(&mut app, "/permissions grant");
+        let last = app.transcript.last().unwrap();
+        assert!(matches!(last.kind, EntryKind::Notice));
+        assert!(last.text.contains("grant enabled"));
+        assert_eq!(app.current_write_policy(), WritePolicy::ConfirmEveryWrite);
+
+        // Revoke
+        command(&mut app, "/permissions revoke");
+        let last = app.transcript.last().unwrap();
+        assert!(matches!(last.kind, EntryKind::Notice));
+        assert!(last.text.contains("grant revoked"));
+        assert_eq!(app.current_write_policy(), WritePolicy::ReadOnly);
+    }
+
+    #[test]
+    fn test_turn_on_and_off_remote_gateway_in_tui() {
+        let (_dir, mut app) = app();
+
+        // Turn on
+        command(&mut app, "/turn-on-remote");
+        let last = app.transcript.last().unwrap();
+        assert!(matches!(last.kind, EntryKind::Notice));
+        assert!(last.text.contains("LAN gateway server started"));
+        assert!(last.text.contains("Bearer token:"));
+        assert!(app.gateway_server.is_some());
+
+        // Already running notification
+        command(&mut app, "/turn-on-remote");
+        let last = app.transcript.last().unwrap();
+        assert!(last.text.contains("already running"));
+
+        // Turn off
+        command(&mut app, "/turn-off-remote");
+        let last = app.transcript.last().unwrap();
+        assert!(last.text.contains("server stopped"));
+        assert!(app.gateway_server.is_none());
+
+        // Turn off when not running
+        command(&mut app, "/turn-off-remote");
+        let last = app.transcript.last().unwrap();
+        assert!(last.text.contains("not running"));
+    }
+
+    #[test]
+    fn test_export_command_preview_and_confirmed_export() {
+        let (dir, mut app) = app();
+
+        // 1. Show usage
+        command(&mut app, "/export");
+        let last = app.transcript.last().unwrap();
+        assert!(last.text.contains("Usage: /export"));
+
+        // Create a test doc in workspace
+        let note_path = dir.path().join("note.md");
+        std::fs::write(&note_path, "# Notes\nMeeting summary.").unwrap();
+
+        // 2. Export preview with source
+        command(&mut app, "/export docx out.docx note.md");
+        let last = app.transcript.last().unwrap();
+        assert!(last.text.contains("Export preview for 'out.docx'"));
+        assert!(app.pending_export.is_some());
+
+        // 3. Confirm export fails while workspace is read-only
+        command(&mut app, "/export confirm out.docx");
+        let last = app.transcript.last().unwrap();
+        assert!(matches!(last.kind, EntryKind::Error));
+        assert!(last.text.contains("Workspace is read-only"));
+
+        // 4. Grant write permission, preview again, and confirm
+        command(&mut app, "/permissions grant");
+        command(&mut app, "/export docx out.docx note.md");
+        command(&mut app, "/export confirm out.docx");
+        let last = app.transcript.last().unwrap();
+        assert!(matches!(last.kind, EntryKind::Notice));
+        assert!(last.text.contains("Successfully exported"));
+        assert!(dir.path().join("out.docx").exists());
+    }
+
+    #[test]
+    fn test_tab_completion_slash_commands_and_file() {
+        let (dir, mut app) = app();
+
+        // 1. Slash command completion
+        app.input = Zeroizing::new("/per".to_string());
+        app.handle_tab_completion();
+        assert_eq!(app.input.as_str(), "/permissions ");
+
+        // 2. Multiple commands completion
+        app.input = Zeroizing::new("/turn".to_string());
+        app.handle_tab_completion();
+        assert!(app.input.starts_with("/turn-"));
+        let last = app.transcript.last().unwrap();
+        assert!(last.text.contains("Available commands"));
+
+        // 3. @file completion
+        std::fs::write(dir.path().join("document1.md"), "content").unwrap();
+        app.input = Zeroizing::new("look at @doc".to_string());
+        app.handle_tab_completion();
+        assert_eq!(app.input.as_str(), "look at @document1.md ");
+    }
+
+    #[test]
+    fn test_undo_command_restores_file() {
+        let (dir, mut app) = app();
+        command(&mut app, "/permissions grant");
+
+        let file_path = dir.path().join("draft.md");
+        std::fs::write(&file_path, "Original content").unwrap();
+
+        // Apply an in-place edit using core editing module
+        let mut undo_stack = SessionUndoStack::new();
+        let _ = dociler_core::editing::apply_in_place_edit(
+            app.session.as_ref().unwrap().workspace(),
+            WritePolicy::ConfirmEveryWrite,
+            true,
+            std::path::Path::new("draft.md"),
+            "Modified content",
+            &mut undo_stack,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file_path).unwrap(),
+            "Modified content"
+        );
+
+        app.undo_stack = undo_stack;
+        app.last_edited_path = Some(std::path::PathBuf::from("draft.md"));
+
+        // Undo
+        command(&mut app, "/undo draft.md");
+        let last = app.transcript.last().unwrap();
+        assert!(matches!(last.kind, EntryKind::Notice));
+        assert!(last.text.contains("Restored previous content"));
+        assert_eq!(
+            std::fs::read_to_string(&file_path).unwrap(),
+            "Original content"
+        );
     }
 }

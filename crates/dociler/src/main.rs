@@ -12,9 +12,14 @@ use dociler_core::chat::CancellationToken;
 use dociler_core::config::{ConfigSource, ConfigStore, LoadedSettings, LocalProfile};
 use dociler_core::credentials::{CredentialError, CredentialStore, OsCredentialStore, Secret};
 use dociler_core::diagnostics::Diagnostics;
+use dociler_core::document::{
+    Block, Document, DocumentFormat, DocumentMetadata, DocumentSource, InlineRun, SourceAnchor,
+};
 use dociler_core::downloads::{
     DownloadError, DownloadOptions, DownloadOutcome, DownloadProgress, download_cached_asset,
 };
+use dociler_core::export::{ExportError, ExportFormat, export_document};
+use dociler_core::extractor::{ExtractionLimits, extract_document_sandboxed};
 use dociler_core::hardware::{
     AcceleratorCandidate, HardwareInventory, MemoryScope, ModelPreflight, PreflightStatus,
 };
@@ -27,6 +32,9 @@ use dociler_core::profiles::{
     install_remote_profile, remove_remote_profile, rotate_remote_credential,
 };
 use dociler_core::remote::{RemoteClient, RemoteError, RemoteProfile};
+use dociler_core::remote_serve::{
+    DEFAULT_GATEWAY_PORT, GatewayConfig, ModelHealthStatus, generate_bearer_token, start_gateway,
+};
 use dociler_core::runtime_install::{
     RuntimeInstallError, RuntimeInstallOptions, RuntimeInstallOutcome, RuntimeInstallState,
     inspect_installed_runtime, inspect_installed_runtime_cancellable, install_cached_runtime,
@@ -48,6 +56,12 @@ Commands:
   chat [NAME]   Open interactive terminal chat; optionally choose a profile
   doctor        Show basic workspace and platform diagnostics
   files [PATH]  List supported documents discovered in the workspace (no writes)
+  permissions [PATH] [--grant|--revoke]
+                Inspect or toggle persistent write grant for the workspace (no writes without preview)
+  export FORMAT DEST [SOURCE] [--confirm]
+                Export canonical document AST to Markdown, PlainText, DOCX, RTF, or ODT
+  serve [--port PORT]
+                Start authenticated local LAN API gateway on 0.0.0.0:11435
   config paths  Show OS config/model/runtime/cache locations (no writes)
   config show   Validate settings and show current-workspace policy (no writes)
   config init   Create safe default settings; never overwrite an existing file
@@ -91,7 +105,7 @@ Options:
   -V, --version Show the build version
 
 Interactive and one-shot remote text chat are available through saved profiles.
-Document reading, persistent local model chat, and the Dociler API server are not available yet.
+Document reading, export, permissions, and LAN gateway are available. Persistent local model chat remains disabled pending release qualification gates.
 ";
 
 enum Command {
@@ -169,6 +183,20 @@ enum Command {
     Files {
         path: Option<std::path::PathBuf>,
     },
+    Permissions {
+        path: Option<std::path::PathBuf>,
+        grant: bool,
+        revoke: bool,
+    },
+    Export {
+        format: ExportFormat,
+        dest: std::path::PathBuf,
+        source: Option<std::path::PathBuf>,
+        confirmed: bool,
+    },
+    Serve {
+        port: Option<u16>,
+    },
 }
 
 fn parse(args: &[OsString]) -> Option<Command> {
@@ -187,7 +215,10 @@ fn parse(args: &[OsString]) -> Option<Command> {
             if (command == "doctor"
                 || command == "config"
                 || command == "model"
-                || command == "files")
+                || command == "files"
+                || command == "permissions"
+                || command == "export"
+                || command == "serve")
                 && (flag == "--help" || flag == "-h") =>
         {
             Some(Command::Help)
@@ -404,6 +435,121 @@ fn parse(args: &[OsString]) -> Option<Command> {
         [command, name] if command == "chat" => Some(Command::Chat {
             name: Some(name.to_str()?.to_owned()),
         }),
+        [command] if command == "permissions" => Some(Command::Permissions {
+            path: None,
+            grant: false,
+            revoke: false,
+        }),
+        [command, flag] if command == "permissions" && flag == "--grant" => {
+            Some(Command::Permissions {
+                path: None,
+                grant: true,
+                revoke: false,
+            })
+        }
+        [command, flag] if command == "permissions" && flag == "--revoke" => {
+            Some(Command::Permissions {
+                path: None,
+                grant: false,
+                revoke: true,
+            })
+        }
+        [command, path] if command == "permissions" && path != "--help" && path != "-h" => {
+            Some(Command::Permissions {
+                path: Some(std::path::PathBuf::from(path)),
+                grant: false,
+                revoke: false,
+            })
+        }
+        [command, a, b] if command == "permissions" => {
+            if a == "--grant" {
+                Some(Command::Permissions {
+                    path: Some(std::path::PathBuf::from(b)),
+                    grant: true,
+                    revoke: false,
+                })
+            } else if a == "--revoke" {
+                Some(Command::Permissions {
+                    path: Some(std::path::PathBuf::from(b)),
+                    grant: false,
+                    revoke: true,
+                })
+            } else if b == "--grant" {
+                Some(Command::Permissions {
+                    path: Some(std::path::PathBuf::from(a)),
+                    grant: true,
+                    revoke: false,
+                })
+            } else if b == "--revoke" {
+                Some(Command::Permissions {
+                    path: Some(std::path::PathBuf::from(a)),
+                    grant: false,
+                    revoke: true,
+                })
+            } else {
+                None
+            }
+        }
+        [command] if command == "serve" => Some(Command::Serve { port: None }),
+        [command, flag, port] if command == "serve" && (flag == "--port" || flag == "-p") => {
+            let port_num = port.to_str()?.parse::<u16>().ok()?;
+            Some(Command::Serve {
+                port: Some(port_num),
+            })
+        }
+        [command, format, dest] if command == "export" => Some(Command::Export {
+            format: parse_export_format(format.to_str()?)?,
+            dest: std::path::PathBuf::from(dest),
+            source: None,
+            confirmed: false,
+        }),
+        [command, format, dest, extra] if command == "export" => {
+            if extra == "--confirm" {
+                Some(Command::Export {
+                    format: parse_export_format(format.to_str()?)?,
+                    dest: std::path::PathBuf::from(dest),
+                    source: None,
+                    confirmed: true,
+                })
+            } else {
+                Some(Command::Export {
+                    format: parse_export_format(format.to_str()?)?,
+                    dest: std::path::PathBuf::from(dest),
+                    source: Some(std::path::PathBuf::from(extra)),
+                    confirmed: false,
+                })
+            }
+        }
+        [command, format, dest, a, b] if command == "export" => {
+            if a == "--confirm" {
+                Some(Command::Export {
+                    format: parse_export_format(format.to_str()?)?,
+                    dest: std::path::PathBuf::from(dest),
+                    source: Some(std::path::PathBuf::from(b)),
+                    confirmed: true,
+                })
+            } else if b == "--confirm" {
+                Some(Command::Export {
+                    format: parse_export_format(format.to_str()?)?,
+                    dest: std::path::PathBuf::from(dest),
+                    source: Some(std::path::PathBuf::from(a)),
+                    confirmed: true,
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_export_format(value: &str) -> Option<ExportFormat> {
+    match value.to_ascii_lowercase().as_str() {
+        "md" | "markdown" => Some(ExportFormat::Markdown),
+        "txt" | "text" | "plaintext" => Some(ExportFormat::PlainText),
+        "docx" => Some(ExportFormat::Docx),
+        "rtf" => Some(ExportFormat::Rtf),
+        "odt" => Some(ExportFormat::Odt),
         _ => None,
     }
 }
@@ -445,11 +591,18 @@ enum CommandError {
     Cancelled,
     Remote(RemoteError),
     Terminal,
+    Export(ExportError),
 }
 
 impl From<io::Error> for CommandError {
     fn from(error: io::Error) -> Self {
         Self::Output(error)
+    }
+}
+
+impl From<ExportError> for CommandError {
+    fn from(error: ExportError) -> Self {
+        Self::Export(error)
     }
 }
 
@@ -970,6 +1123,234 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
                     )?;
                 }
             }
+        }
+        Command::Permissions {
+            path,
+            grant,
+            revoke,
+        } => {
+            let ws = match path {
+                Some(p) => Workspace::open(&p).map_err(|err| {
+                    let _ = writeln!(
+                        io::stderr().lock(),
+                        "Failed to open workspace at '{}': {err}",
+                        p.display()
+                    );
+                    CommandError::Workspace
+                })?,
+                None => workspace()?,
+            };
+            let app_paths = paths()?;
+            let store = ConfigStore::new(app_paths);
+            let mut loaded = store
+                .load()
+                .map_err(|error| CommandError::Config(error.kind()))?;
+
+            if grant {
+                loaded
+                    .settings
+                    .grant_workspace_write(&ws)
+                    .map_err(|error| CommandError::Config(error.kind()))?;
+                store
+                    .save(&loaded.settings)
+                    .map_err(|error| CommandError::Config(error.kind()))?;
+                writeln!(output, "Workspace: {}", ws.root().display())?;
+                writeln!(
+                    output,
+                    "Write grant: enabled (stored persistently in settings)"
+                )?;
+                writeln!(
+                    output,
+                    "Notice: Each in-place mutation or export still requires explicit diff/preview confirmation."
+                )?;
+            } else if revoke {
+                loaded.settings.revoke_workspace_write(&ws);
+                store
+                    .save(&loaded.settings)
+                    .map_err(|error| CommandError::Config(error.kind()))?;
+                writeln!(output, "Workspace: {}", ws.root().display())?;
+                writeln!(output, "Write grant: revoked (read-only mode active)")?;
+            } else {
+                writeln!(output, "Workspace: {}", ws.root().display())?;
+                match loaded.settings.write_policy(&ws) {
+                    WritePolicy::ReadOnly => {
+                        writeln!(
+                            output,
+                            "Write grant: read-only (mutations and exports disabled)"
+                        )?;
+                        writeln!(
+                            output,
+                            "To enable write access for this workspace, run: dociler permissions --grant"
+                        )?;
+                    }
+                    WritePolicy::ConfirmEveryWrite => {
+                        writeln!(
+                            output,
+                            "Write grant: enabled (stored persistently in settings)"
+                        )?;
+                        writeln!(
+                            output,
+                            "Notice: Each in-place mutation or export still requires explicit diff/preview confirmation."
+                        )?;
+                        writeln!(
+                            output,
+                            "To revoke write access for this workspace, run: dociler permissions --revoke"
+                        )?;
+                    }
+                }
+            }
+        }
+        Command::Export {
+            format,
+            dest,
+            source,
+            confirmed,
+        } => {
+            let ws = workspace()?;
+            let loaded = settings()?;
+            if loaded.settings.write_policy(&ws) == WritePolicy::ReadOnly {
+                return Err(CommandError::Usage(
+                    "workspace write access is disabled; grant write permission first with 'dociler permissions --grant'",
+                ));
+            }
+
+            let doc = if let Some(ref src) = source {
+                let full_src = if src.is_relative() {
+                    ws.root().join(src)
+                } else {
+                    src.clone()
+                };
+                if !full_src.exists() {
+                    return Err(CommandError::Usage("export source file does not exist"));
+                }
+                let limits = ExtractionLimits::default();
+                let cancel = CancellationToken::new();
+                extract_document_sandboxed(&full_src, &limits, Some(&cancel))
+                    .map_err(|_| CommandError::Usage("failed to extract source document"))?
+            } else {
+                let mut stdin_bytes = Vec::new();
+                if !io::stdin().is_terminal() {
+                    let _ = io::stdin()
+                        .lock()
+                        .take(1024 * 1024)
+                        .read_to_end(&mut stdin_bytes);
+                }
+                if stdin_bytes.is_empty() {
+                    return Err(CommandError::Usage(
+                        "export requires a SOURCE file or non-empty standard input: dociler export FORMAT DEST [SOURCE] [--confirm]",
+                    ));
+                }
+                let text = std::str::from_utf8(&stdin_bytes)
+                    .map_err(|_| CommandError::Input)?
+                    .to_owned();
+                let source =
+                    DocumentSource::from_bytes("stdin", DocumentFormat::PlainText, &stdin_bytes);
+                let blocks = vec![Block::Paragraph {
+                    runs: vec![InlineRun::Text(text.trim().to_owned())],
+                    anchor: SourceAnchor::default(),
+                }];
+                Document::new(source, DocumentMetadata::default(), blocks)
+            };
+
+            if !confirmed {
+                writeln!(output, "Document export preview:")?;
+                writeln!(
+                    output,
+                    "  Target format: {:?} (.{})",
+                    format,
+                    format.extension()
+                )?;
+                writeln!(output, "  Destination:   {}", dest.display())?;
+                if let Some(ref s) = source {
+                    writeln!(output, "  Source file:   {}", s.display())?;
+                } else {
+                    writeln!(output, "  Source:        standard input")?;
+                }
+                writeln!(output, "  Document AST:  {} block(s)", doc.blocks.len())?;
+                writeln!(output)?;
+                writeln!(output, "To execute export, add --confirm:")?;
+                if let Some(ref s) = source {
+                    writeln!(
+                        output,
+                        "  dociler export {} {} {} --confirm",
+                        format.extension(),
+                        dest.display(),
+                        s.display()
+                    )?;
+                } else {
+                    writeln!(
+                        output,
+                        "  dociler export {} {} --confirm",
+                        format.extension(),
+                        dest.display()
+                    )?;
+                }
+                return Err(CommandError::Usage(
+                    "export requires explicit consent: dociler export FORMAT DEST [SOURCE] --confirm",
+                ));
+            }
+
+            let report = export_document(&ws, &doc, format, &dest, false)?;
+            writeln!(
+                output,
+                "Exported document to '{}' ({} bytes).",
+                report.destination_path.display(),
+                report.byte_size
+            )?;
+            for warning in &report.warnings {
+                writeln!(output, "  Warning: {warning}")?;
+            }
+        }
+        Command::Serve { port } => {
+            let bind_port = port.unwrap_or(DEFAULT_GATEWAY_PORT);
+            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], bind_port));
+            let cancellation = CancellationToken::new();
+            let _signals = cli_signals::CliSignalGuard::install(cancellation.clone())
+                .map_err(|_| CommandError::Signal)?;
+            let config = GatewayConfig {
+                bind_addr: addr,
+                active_model: None,
+                model_status: ModelHealthStatus::Unloaded,
+            };
+            let token = generate_bearer_token().map_err(CommandError::Output)?;
+            let gateway = start_gateway(config, token).map_err(CommandError::Output)?;
+            let bound = gateway.bound_addr();
+            let token = gateway.current_token();
+            writeln!(
+                output,
+                "Dociler LAN API Gateway listening on http://{bound}"
+            )?;
+            writeln!(output, "Bearer Token: {}", token.as_str())?;
+            writeln!(output, "Endpoints:")?;
+            writeln!(output, "  GET  http://{bound}/healthz (unauthenticated)")?;
+            writeln!(
+                output,
+                "  GET  http://{bound}/v1/models (requires Bearer token)"
+            )?;
+            writeln!(
+                output,
+                "  POST http://{bound}/v1/chat/completions (requires Bearer token)"
+            )?;
+            writeln!(
+                output,
+                "  POST http://{bound}/v1/documents/analyze (requires Bearer token)"
+            )?;
+            writeln!(output, "  GET  http://{bound}/openapi.json")?;
+            writeln!(output)?;
+            writeln!(
+                output,
+                "Notice: Dociler does not configure firewalls, port forwarding, or TLS."
+            )?;
+            writeln!(output, "Press Ctrl+C to stop the server.")?;
+            output.flush()?;
+
+            while !cancellation.is_cancelled() && gateway.is_running() {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+
+            writeln!(output, "\nShutting down Dociler API Gateway...")?;
+            gateway.shutdown();
+            writeln!(output, "Gateway stopped.")?;
         }
         Command::ConfigPaths => {
             let paths = paths()?;
@@ -1651,12 +2032,15 @@ fn execute(command: Command, output: &mut impl Write) -> Result<(), CommandError
             )?;
             writeln!(
                 output,
-                "Document parsing and local inference: not implemented"
+                "Document reading and AST export: enabled; local inference: disabled pending release gates"
             )?;
             let app_paths = paths()?;
             let hardware = HardwareInventory::inspect(&app_paths.models_dir());
             print_hardware(output, &hardware)?;
-            writeln!(output, "API server: not implemented (no listening ports)")?;
+            writeln!(
+                output,
+                "API server: LAN gateway available via 'dociler serve' or '/turn-on-remote'"
+            )?;
         }
     }
     Ok(())
@@ -1952,6 +2336,16 @@ fn main() -> ExitCode {
                 CommandError::Terminal => {
                     "interactive terminal setup or event handling failed; terminal state was restored."
                 }
+                CommandError::Export(ref error) => match error {
+                    ExportError::BinarySourceOverwriteDenied { .. } => {
+                        "refusing to overwrite existing binary source document."
+                    }
+                    ExportError::PathEscape { .. } => {
+                        "export destination escapes workspace boundary."
+                    }
+                    ExportError::Io(_) => "export failed due to an I/O error.",
+                    ExportError::Zip(_) => "export failed during zip archive packaging.",
+                },
                 CommandError::Output(_) => "output failed; check the output destination.",
             };
             let _ = writeln!(io::stderr().lock(), "dociler: {message}");

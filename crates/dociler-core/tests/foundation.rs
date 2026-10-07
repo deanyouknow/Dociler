@@ -159,6 +159,35 @@ fn valid_profiles_and_exact_workspace_grants_roundtrip() {
 }
 
 #[test]
+fn workspace_write_permission_grant_and_revoke_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(dir.path()).unwrap();
+    let mut settings = Settings::default();
+
+    assert_eq!(settings.write_policy(&workspace), WritePolicy::ReadOnly);
+    assert!(settings.write_workspaces().is_empty());
+
+    // Grant
+    assert!(settings.grant_workspace_write(&workspace).unwrap());
+    assert_eq!(
+        settings.write_policy(&workspace),
+        WritePolicy::ConfirmEveryWrite
+    );
+    assert_eq!(settings.write_workspaces().len(), 1);
+
+    // Idempotent grant
+    assert!(!settings.grant_workspace_write(&workspace).unwrap());
+
+    // Revoke
+    assert!(settings.revoke_workspace_write(&workspace));
+    assert_eq!(settings.write_policy(&workspace), WritePolicy::ReadOnly);
+    assert!(settings.write_workspaces().is_empty());
+
+    // Idempotent revoke
+    assert!(!settings.revoke_workspace_write(&workspace));
+}
+
+#[test]
 fn history_is_bounded_clearable_and_never_written_to_workspace() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = Workspace::open(dir.path()).unwrap();

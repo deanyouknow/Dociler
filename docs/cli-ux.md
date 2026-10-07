@@ -158,32 +158,25 @@ the selected set and estimated processing work.
 | `/files` | Browse supported workspace documents and extraction status. |
 | `/status` | Show backend health, memory/context, permissions, and server state. |
 | `/clear` | Clear the in-memory transcript and extracted context after confirmation. |
-| `/permissions` | Inspect or enable/disable the current workspace write grant. |
-| `/export` | Export the latest answer/draft/transcript to an approved new path. |
-| `/turn-on-remote` | Start the authenticated LAN API on port 11435. |
-| `/turn-off-remote` | Stop and unregister the LAN API service. |
+| `/permissions` | Inspect or toggle the persistent workspace write grant (`grant`, `revoke`). |
+| `/export` | Export canonical document AST or active context to Markdown, PlainText, DOCX, RTF, or ODT. |
+| `/undo` | Revert the most recent or targeted in-place text edit from session memory. |
+| `/turn-on-remote` | Start or rotate the authenticated LAN API gateway on 0.0.0.0:11435. |
+| `/turn-off-remote` | Stop the LAN API gateway service. |
 | `/update` | Check signed metadata and install only after confirmation. |
-| `/exit` | Exit, asking what to do with a running LAN service. |
+| `/exit` | Exit the terminal UI, stopping running services cleanly. |
 
 `/help`, `/status`, `/files`, `/model [list|status|info PROFILE|use PROFILE|unload|remove TARGET|repair PROFILE]`,
 `/connect [NAME|add|refresh|check NAME|edit NAME|remove NAME|key NAME]`,
-confirmed `/clear`, and `/exit` are active in the terminal surface. `/files`
-discovers and lists supported workspace documents, formats, sizes, and direct-editing
-capabilities without loading full content into memory. Selecting a
-local profile (`/model use PROFILE`) sets the active target to Local in
-diagnostic mode; conversation context is reset, and prompts return actionable
-notices explaining that local chat remains disabled pending release qualification
-gates. In-TUI cache mutations (`/model remove` and `/model repair`) require exact
-command repetition following a dry-run preview before executing.
+`/permissions [grant|revoke]`, `/turn-on-remote [rotate]`, `/turn-off-remote`,
+`/export FORMAT DEST [SRC]`, `/undo [PATH]`, confirmed `/clear`, and `/exit` are active in the terminal surface.
+The multiline composer provides interactive `Tab` completion for slash commands (`/`) and discovered workspace
+documents (`@file`). `/files` discovers and lists supported workspace documents, formats, sizes, and direct-editing
+capabilities without loading full content into memory. Selecting a local profile (`/model use PROFILE`) sets the active target to Local in diagnostic mode; conversation context is reset, and prompts return actionable notices explaining that local chat remains disabled pending release qualification gates. In-TUI cache mutations (`/model remove` and `/model repair`) require exact command repetition following a dry-run preview before executing.
 
-`dociler files [PATH]`, `dociler model status`, `model list`, and `model verify [PROFILE]` are available
-outside the TUI, as is the explicitly confirmed `model download PROFILE --confirm [--restart]`,
-`model remove TARGET --confirm`, `model repair PROFILE --confirm`,
-`model runtime-install --confirm`, `model runtime-probe --confirm`, and diagnostic-only
-`model load-probe PROFILE --confirm [--experimental] [--ceiling-bytes BYTES]`; the remaining rows are the approved target contract.
-Both `model download` and `model repair` are wired to scoped signal listeners
-(SIGINT/SIGTERM/Ctrl+C), cooperatively stopping active HTTP body streams and
-preserving partial files for subsequent resumption.
+`dociler files [PATH]`, `dociler permissions [PATH] [--grant|--revoke]`, `dociler export FORMAT DEST [SOURCE] [--confirm]`,
+`dociler serve [--port PORT]`, `dociler model status`, `model list`, and `model verify [PROFILE]` are available outside the TUI, as is the explicitly confirmed `model download PROFILE --confirm [--restart]`, `model remove TARGET --confirm`, `model repair PROFILE --confirm`, `model runtime-install --confirm`, `model runtime-probe --confirm`, and diagnostic-only `model load-probe PROFILE --confirm [--experimental] [--ceiling-bytes BYTES]`.
+`model download`, `model repair`, and `serve` are wired to scoped signal listeners (SIGINT/SIGTERM/Ctrl+C), cooperatively stopping active HTTP streams or listeners cleanly.
 
 ## Write experience
 

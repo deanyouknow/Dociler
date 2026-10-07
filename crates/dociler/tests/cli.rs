@@ -173,7 +173,7 @@ fn invalid_arguments_fail_without_echoing_sensitive_input() {
     for args in [
         vec!["--api-key=private-test-value"],
         vec!["doctor", "unexpected"],
-        vec!["serve"],
+        vec!["unsupported-subcommand"],
     ] {
         let output = workspace.run(&args);
         assert_eq!(output.status.code(), Some(2));
@@ -811,4 +811,105 @@ fn worker_extract_subcommand_plain_text_and_rtf() {
         doc.source.format,
         dociler_core::document::DocumentFormat::Rtf
     );
+}
+
+#[test]
+fn permissions_subcommand_inspect_grant_and_revoke() {
+    let workspace = Workspace::new();
+
+    // 1. Initial inspection: read-only
+    let output = workspace.run(&["permissions"]);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Write grant: read-only"));
+    assert!(stdout.contains("dociler permissions --grant"));
+
+    // 2. Grant write access
+    let grant_output = workspace.run(&["permissions", "--grant"]);
+    assert_eq!(grant_output.status.code(), Some(0));
+    let grant_stdout = String::from_utf8(grant_output.stdout).unwrap();
+    assert!(grant_stdout.contains("Write grant: enabled"));
+    assert!(grant_stdout.contains(
+        "Each in-place mutation or export still requires explicit diff/preview confirmation"
+    ));
+
+    // 3. Inspect after grant
+    let check_output = workspace.run(&["permissions"]);
+    assert_eq!(check_output.status.code(), Some(0));
+    let check_stdout = String::from_utf8(check_output.stdout).unwrap();
+    assert!(check_stdout.contains("Write grant: enabled"));
+    assert!(check_stdout.contains("dociler permissions --revoke"));
+
+    // 4. Revoke write access
+    let revoke_output = workspace.run(&["permissions", "--revoke"]);
+    assert_eq!(revoke_output.status.code(), Some(0));
+    let revoke_stdout = String::from_utf8(revoke_output.stdout).unwrap();
+    assert!(revoke_stdout.contains("Write grant: revoked"));
+
+    // 5. Inspect after revoke
+    let final_output = workspace.run(&["permissions"]);
+    assert_eq!(final_output.status.code(), Some(0));
+    let final_stdout = String::from_utf8(final_output.stdout).unwrap();
+    assert!(final_stdout.contains("Write grant: read-only"));
+}
+
+#[test]
+fn export_subcommand_requires_permissions_preview_and_confirms() {
+    let workspace = Workspace::new();
+    let src_path = workspace.0.join("sample.txt");
+    fs::write(
+        &src_path,
+        "Export test content paragraph 1.\n\nParagraph 2.",
+    )
+    .unwrap();
+    let dest_rel = "exported.md";
+
+    // 1. Export fails when read-only
+    let denied_output = workspace.run(&["export", "md", dest_rel, "sample.txt", "--confirm"]);
+    assert_eq!(denied_output.status.code(), Some(1));
+    let stderr = String::from_utf8(denied_output.stderr).unwrap();
+    assert!(stderr.contains("workspace write access is disabled"));
+
+    // 2. Grant permissions
+    let grant = workspace.run(&["permissions", "--grant"]);
+    assert_eq!(grant.status.code(), Some(0));
+
+    // 3. Export preview without --confirm
+    let preview_output = workspace.run(&["export", "md", dest_rel, "sample.txt"]);
+    assert_eq!(preview_output.status.code(), Some(1));
+    let stdout = String::from_utf8(preview_output.stdout).unwrap();
+    assert!(stdout.contains("Document export preview:"));
+    assert!(stdout.contains("Target format: Markdown"));
+    assert!(stdout.contains("Destination:   exported.md"));
+    assert!(stdout.contains("Source file:   sample.txt"));
+    assert!(stdout.contains("--confirm"));
+
+    // Ensure dest was NOT written
+    assert!(!workspace.0.join(dest_rel).exists());
+
+    // 4. Export with --confirm
+    let confirm_output = workspace.run(&["export", "md", dest_rel, "sample.txt", "--confirm"]);
+    assert_eq!(confirm_output.status.code(), Some(0));
+    let confirm_stdout = String::from_utf8(confirm_output.stdout).unwrap();
+    assert!(confirm_stdout.contains("Exported document to"));
+
+    // Ensure dest WAS written and contains content
+    let exported_content = fs::read_to_string(workspace.0.join(dest_rel)).unwrap();
+    assert!(exported_content.contains("Export test content paragraph 1."));
+    assert!(exported_content.contains("Paragraph 2."));
+}
+
+#[test]
+fn export_subcommand_from_stdin() {
+    let workspace = Workspace::new();
+    let grant = workspace.run(&["permissions", "--grant"]);
+    assert_eq!(grant.status.code(), Some(0));
+
+    let input = b"Hello from stdin streamed text!";
+    let output = workspace.run_with_input(&["export", "txt", "out.txt", "--confirm"], input);
+    assert_eq!(output.status.code(), Some(0));
+    let dest = workspace.0.join("out.txt");
+    assert!(dest.exists());
+    let content = fs::read_to_string(dest).unwrap();
+    assert!(content.contains("Hello from stdin streamed text!"));
 }

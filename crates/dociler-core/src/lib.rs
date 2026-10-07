@@ -22,6 +22,7 @@ pub mod paths;
 mod probe_memory;
 pub mod profiles;
 pub mod remote;
+pub mod remote_serve;
 pub mod runtime_install;
 pub mod runtime_probe;
 pub mod session;
