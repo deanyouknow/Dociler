@@ -1,12 +1,12 @@
 # Project Checkpoint
 
-Last updated: 2026-10-07T03:25:00Z
+Last updated: 2026-10-07T03:36:00Z
 
 ## Current status
 
-**Status:** M3 remote text flow, M4 hardware preflight/downloads/installed runtime/model load probe, M5 complete document processing pipeline, M6 terminal experience and permissions, M7 skills and prompt construction, M8 local and remote API behavior, and M9 privacy, golden fixtures, adversarial security tests, and model quality gates are locally implemented. Local model chat remains strictly disabled pending full-context memory, process-group peak RSS, and model quality qualification gates.
+**Status:** M3 remote text flow, M4 hardware preflight/downloads/installed runtime/model load probe, M5 complete document processing pipeline, M6 terminal experience and permissions, M7 skills and prompt construction, M8 local and remote API behavior, M9 privacy, golden fixtures, adversarial security tests, and model quality gates, and M10 native installers (install.sh, install.ps1), release packaging, and release checklist are locally implemented. Local model chat remains strictly disabled pending full-context memory, process-group peak RSS, and model quality qualification gates.
 
-**Active milestone:** Milestone M10 — Explicitly deferred review, final release checklist & packaging active.
+**Active milestone:** Milestone M10 — Native installers, release packaging, and release checklist complete.
 
 The user authorized implementation on 2026-09-11. The workspace now builds a
 `dociler` executable with help, version, workspace/platform diagnostics, config
@@ -285,6 +285,7 @@ profile changed. Added ADR-016 and tests, bringing the Linux suite to 56.
 - Implemented Milestone M7 skills and prompt construction. Embedded 7 immutable Markdown skill modules in `crates/dociler-core/src/skills/` (`core_policy.md`, `discovery.md`, `grounded_reading.md`, `summarization.md`, `comparison.md`, `citation.md`, `safe_editing.md`) versioned at `SKILLS_VERSION = "1.0.0"` via compile-time `include_str!`. Implemented task-relevant skill selection (`select_task_skills`) inspecting task context, document presence, and edit intent. Injected Dociler core grounding policy and selected skills following the 5-layer prompt hierarchy across CLI (`dociler run`), TUI interactive chat (`start_generation`), and authenticated LAN gateway (`POST /v1/chat/completions`). Injected client-provided system messages strictly subordinate to core policy under Layer 3 (`## Client Preferences`). Added transparent model profile aliasing exposing only `dociler-lite` and `dociler-pro` aliases in `/v1/models` and rejecting raw model names, while fully attributing base model origins and licensing in `/model info`, `dociler doctor`, and documentation. Added ADR-036 and comprehensive tests. (Standard workspace suite: 208 passed, 3 ignored; PTY integration passed).
 - Implemented Milestone M8 local and remote API behavior. Added Dociler-managed `llama-server` loopback router lifecycle in `crates/dociler-core/src/runtime_router.rs` (`RuntimeRouter`) managing ephemeral OS-assigned loopback port binding, cryptographically generated 256-bit internal API key (`--api-key-file`), process group isolation (`process_group(0)` on Unix), environment clearing, bounded diagnostic ring buffer (64 KiB), startup health check polling, and graceful shutdown/reap. Public API never leaks internal loopback port, internal key, or base model name. Implemented single-slot concurrency rate limiting (`try_acquire_generation_permit`) returning HTTP 429 (`rate_limit_exceeded`) when generation is active, with RAII permit drop guard. Implemented `POST /v1/chat/completions` with profile alias validation (`dociler-lite` / `dociler-pro`), subordinate client system prompt placement into Layer 3 under `## Client Preferences`, task-relevant skill selection into Layer 2, strict parameter bounds validation, rejection of unsupported fields, and SSE streaming with disconnect cancellation. Implemented `POST /v1/documents/analyze` multipart pipeline with zero-dependency multipart parsing, RAII temporary file upload staging (mode `0o600`), sandboxed out-of-process extraction (in-process for direct-editable text), AST semantic chunking, 5-layer prompt assembly with untrusted delimiters, source citation validation, and safe `dociler_sources` metadata response. Added upstream remote profile document consent gate (`DocumentConsentTracker`) requiring session-level consent before transmitting local document text upstream. Published strictly conformant OpenAPI 3.1 specification at `GET /openapi.json`. Added ADR-037 and comprehensive tests. (Standard workspace suite: 215 passed, 3 ignored; PTY integration passed).
 - Implemented Milestone M9 privacy, tests, and release gates. Added 14 golden document fixture tests across all 7 supported formats (.md, .txt, .docx, .odt, .rtf, .pdf, .doc) with Indonesian/Unicode coverage (dates, currency Rp, proper nouns) and negative fixtures (scanned PDF disclaimer, encrypted PDF/DOC, truncated DOCX, MIME mismatch, decompression bombs, inert prompt injection). Implemented adversarial prompt injection defense escaping boundary delimiters (`sanitize_untrusted_chunk_text`) and citation hallucination prevention rewriting unknown sources to `[unverified source: <id>]`. Verified zero-telemetry and non-persistence privacy guarantees with ephemeral in-memory storage of chats, prompts, extracted text, and BM25 indices, plus 0o600 permissions on staging files. Added model quality gate evaluations (`crates/dociler-core/src/evaluation.rs`) asserting factual QA accuracy (Lite >= 85%, Pro >= 92%), valid citation rates (Lite >= 95%, Pro >= 97%), zero invented values, and context/RSS bounds. Added ADR-038 and comprehensive tests. (Standard workspace suite: 244 passed, 3 ignored; PTY integration passed).
+- Implemented Milestone M10 native installers, release packaging, and release checklist. Added standalone user-local installer `install.sh` for macOS and Linux with OS/architecture detection, restricted staging (mode 0700), checksum verification, atomic binary installation to `~/.local/bin`, and path diagnostics. Added `install.ps1` for Windows x86-64 PowerShell environments with SHA-256 verification and user PATH management. Both installers enforce the zero-external-dependencies promise: never installing Docker, Python, Ollama, model weights, or background system services. Added release packaging pipeline `scripts/package_release.sh` generating platform release tarballs/zips and `SHA256SUMS`. Added `NOTICE` attribution covering Apache-2.0, Qwen base models, and llama.cpp runtime. Added ADR-039 and comprehensive installer integration tests. (Standard workspace suite: 252 passed, 3 ignored; PTY integration passed).
 
 ## Work in progress
 
@@ -292,7 +293,7 @@ None.
 
 ## Next recommended task
 
-Milestone M10 — Repository-level installer scripts (install.sh for macOS/Linux, install.ps1 for Windows), release checklist validation, and distribution packaging.
+Post-v1 explicitly deferred roadmap review (spreadsheets, presentations, OCR pack, multi-node serving) and continuous qualification on hosted target hardware.
 
 ## Blockers
 
@@ -445,8 +446,35 @@ repository or shell startup files. Use the normal rustup setup described in
   model quality gate metrics (Lite: >=85% accuracy, >=95% citations, 0 invented values,
   8K context, <=5.5 GiB peak RSS; Pro: >=92% accuracy, >=97% citations, 0 invented values,
   16K context, <=11.5 GiB peak RSS).
+- ADR-039: User-local standalone installer scripts and distribution release packaging:
+  Standalone user-local installers (`install.sh`, `install.ps1`) targeting `~/.local/bin`
+  and `%LOCALAPPDATA%\Programs\Dociler\bin`, zero superuser/root permissions, strict
+  absence of Docker/Python/Ollama/models/services installation, restricted staging
+  (mode 0700), SHA-256 verification, release packaging pipeline (`scripts/package_release.sh`),
+  and `NOTICE` attribution for Apache-2.0, Qwen models, and llama.cpp.
 
 ## Verification
+
+### M10 Native installers, release packaging, and release checklist — 2026-10-07
+
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo fmt --all -- --check`.
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo clippy --workspace --all-targets --locked -- -D warnings`.
+- **passed:** `PATH="/home/codespace/.cargo/bin:$PATH" cargo test --workspace --all-targets --locked` (252 tests passed, 3 ignored):
+  - `dociler` bin unit tests: 17 passed.
+  - `dociler` CLI integration tests: 28 passed.
+  - `dociler` installer integration tests: 8 passed (`test_install_sh_help`, `test_install_sh_dry_run`, `test_install_sh_invalid_argument`, `test_install_sh_local_binary_install`, `test_install_sh_checksum_verification_success_and_failure`, `test_install_ps1_content_and_contract`, `test_package_release_script`, `test_notice_file_attribution`).
+  - `dociler-core` unit tests: 151 passed, 3 ignored.
+  - `foundation`: 12 passed.
+  - `golden_documents`: 14 passed.
+  - `model_quality`: 6 passed.
+  - `remote`: 6 passed.
+  - `security_privacy`: 6 passed.
+  - `runtime_router`: 1 passed.
+  - `remote_serve`: 6 passed.
+- **passed:** `python3 scripts/test_tui_pty.py target/debug/dociler` (PTY onboarding, health check, multi-turn chat, cancellation, resize, and cleanup).
+- **passed:** `python3 scripts/check_docs.py` (17 Markdown files, 67 relative links, README coverage).
+- **passed:** `git diff --check` (no whitespace or newline errors).
+- **not run:** opt-in real GGUF SmolLM2 test, full-context 8K/16K workloads, native non-Linux platforms.
 
 ### M9 Privacy, tests, and release gates — 2026-10-07
 
@@ -1104,3 +1132,4 @@ Do not delete or reorder entries. Append corrections and future progress.
 | 2026-10-07T01:41:00Z | Antigravity | Implement Milestone M7 skills and prompt construction | Embed compact immutable Markdown skill modules (discovery, grounded reading, summarization, comparison, citation, safe editing), task-relevant skill selection, request injection across CLI/TUI/Gateway, and model profile transparency | crates/dociler-core/src/skills/, crates/dociler-core/src/context.rs, crates/dociler-core/src/session.rs, crates/dociler-core/src/remote.rs, crates/dociler-core/src/remote_serve.rs, crates/dociler/src/main.rs, crates/dociler/src/tui.rs, docs/decisions.md, CHECKPOINT.md | passed: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --all-targets --locked` (208 passed, 3 ignored), `python3 scripts/test_tui_pty.py target/debug/dociler`, `python3 scripts/check_docs.py`, `git diff --check` | COMPLETE; M7 SKILLS & PROMPT CONSTRUCTION COMPLETE | Milestone M8: Local and remote API behavior (sidecar loopback lifecycle, model loading admission, /v1/chat/completions local streaming, and /v1/documents/analyze multipart pipeline) |
 | 2026-10-07T02:30:00Z | Antigravity | Implement Milestone M8 local and remote API behavior | Added llama.cpp sidecar router lifecycle (RuntimeRouter), loopback auth router, /v1/chat/completions parameter bounds checking, skill injection, and SSE streaming, /v1/documents/analyze multipart pipeline with sandboxed extraction and RAII cleanup, concurrency rate limiting (429), upstream remote consent gate, OpenAPI 3.1 spec, and ADR-037 | crates/dociler-core/src/runtime_router.rs, crates/dociler-core/src/remote_serve.rs, crates/dociler-core/src/remote.rs, crates/dociler-core/src/lib.rs, crates/dociler/src/main.rs, crates/dociler/src/tui.rs, docs/decisions.md, CHECKPOINT.md | passed: fmt, strict clippy, 215 tests, test_tui_pty.py, check_docs.py, git diff --check | COMPLETE; M8 API BEHAVIOR COMPLETE | Milestone M9: Privacy, tests, and release gates |
 | 2026-10-07T03:03:00Z | Antigravity | Milestone M9: Privacy, tests, and release gates | Golden document fixtures for all formats (MD, TXT, PDF, DOCX, DOC, RTF, ODT), Indonesian/Unicode test suite, negative fixtures (encrypted, malformed, image-only, bombs), adversarial prompt injection & path traversal security tests, privacy non-persistence & zero-telemetry audits, model-quality evaluation suite, release checklist validation | crates/dociler-core/tests/, crates/dociler-core/src/, docs/decisions.md, CHECKPOINT.md | passed: fmt, clippy, 244 workspace tests, test_tui_pty.py, check_docs.py, git diff --check | COMPLETE; M9 PRIVACY & GATES COMPLETE | Milestone M10: Installer scripts (install.sh / install.ps1), release checklist validation, and packaging |
+| 2026-10-07T03:29:24Z | Antigravity | Implement Milestone M10 native installers, release packaging, and release checklist | Repository-level install.sh (macOS/Linux) and install.ps1 (Windows), automated release packaging script, installer integration tests, release checklist validation, ADR-039 | install.sh, install.ps1, scripts/package_release.sh, crates/dociler/tests/installer.rs, NOTICE, README.md, docs/decisions.md, CHECKPOINT.md | passed: fmt, clippy, 252 workspace tests, test_tui_pty.py, check_docs.py, git diff --check | COMPLETE; M10 INSTALLERS & PACKAGING COMPLETE | Post-v1 deferred roadmap review and continuous qualification on hosted hardware |

@@ -1,0 +1,12 @@
+Dociler
+Copyright (c) 2026 Dean Youknow and Contributors
+
+This product includes software developed under the Apache License, Version 2.0.
+
+Attribution & Model Licenses:
+- Pinned local model profiles use Qwen models developed by the Qwen team (Alibaba Cloud),
+  licensed under the Apache License 2.0.
+  - dociler-lite: Qwen3.5 4B Instruct (bartowski/Qwen_Qwen3.5-4B-GGUF)
+  - dociler-pro: Qwen3.5 9B Instruct (bartowski/Qwen_Qwen3.5-9B-GGUF)
+- Pinned local runtime sidecar uses llama.cpp developed by Georgi Gerganov and
+  contributors under the MIT License.

@@ -718,3 +718,27 @@ destructive operations.
 **Why:** Local-first document AI requires mathematical and architectural guarantees that user documents remain private, that untrusted document content cannot execute commands or hijack model behavior, that citations cannot be fabricated without detection, and that release admission strictly measures factual accuracy and memory ceilings against fixed gates.
 
 **Rejected:** Allowing document text or client prompts to break out of Layer 4 delimiters; sending document content upstream without destination consent; persisting unexported transcripts or document ASTs to disk; relaxing factual QA or citation validity thresholds below gate specifications.
+
+## ADR-039: User-local standalone installer scripts and distribution release packaging
+
+**Decision:** Provide repository-level `install.sh` (macOS/Linux) and `install.ps1` (Windows), release bundle packaging (`scripts/package_release.sh`), and `NOTICE` attribution:
+1. **User-Local Standalone Installation:**
+   - Installers target standard user-local directories: `~/.local/bin` (or `$XDG_BIN_HOME`) on POSIX systems, and `%LOCALAPPDATA%\Programs\Dociler\bin` on Windows.
+   - Requires zero superuser/root permissions.
+   - Places only the standalone `dociler` executable (and release metadata) into the target directory.
+   - Explicitly guarantees: Never installs Docker, Python, Ollama, model weights, background daemons, or system services.
+   - Model profiles (`dociler-lite`, `dociler-pro`) and `llama.cpp` sidecar runtime are downloaded/installed only when the user explicitly chooses local mode during interactive onboarding.
+2. **SHA-256 Checksum Verification & Safe Staging:**
+   - Downloads/extracts into restricted temporary staging directories (mode `0700`).
+   - Verifies SHA-256 checksums from `SHA256SUMS` or parameter before extraction/publication.
+   - Atomically replaces target binary without leaving corrupted intermediate state.
+   - Sets executable permissions (`chmod 0755` on Unix).
+   - Validates user `$PATH` and provides clear instructions for shell configuration.
+3. **Release Packaging & Distribution Artifacts:**
+   - Bundles `dociler` binary, `LICENSE`, `NOTICE`, and `README.md` into tarball (`.tar.gz`) for Linux/macOS and zip (`.zip`) for Windows.
+   - Generates release checksum manifest `SHA256SUMS`.
+   - `NOTICE` provides explicit attribution for Apache-2.0 and upstream dependencies: Qwen 3.5 base models (Apache-2.0) and llama.cpp runtime (MIT License).
+
+**Why:** Satisfies product requirements for native, zero-dependency installation without requiring Docker, Python, or external package managers, while ensuring verifiable cryptographic integrity and complete transparency of upstream model and runtime provenance.
+
+**Rejected:** Requiring root/sudo or system-wide package managers (brew, apt) for installation; downloading multi-gigabyte models or runtimes during application install; installing systemd services or persistent daemons; omitting cryptographic checksum verification.

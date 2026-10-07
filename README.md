@@ -46,14 +46,38 @@ The RAM classes are supported targets, not guarantees for every machine below
 those capacities. Model qualification and measured memory limits are release
 gates described in the testing documentation.
 
-## Intended installation experience
+## Installation
 
-The eventual repository will provide `install.sh` for macOS/Linux and
-`install.ps1` for Windows. Installation will place only the Dociler executable
-and release metadata. A compatible `llama.cpp` runtime and the selected model
-will be downloaded later, only if the user chooses local mode during onboarding.
+Dociler provides user-local installation scripts for macOS, Linux, and Windows.
+Installation places only the standalone `dociler` executable into your user
+binary directory (`~/.local/bin` on POSIX systems, `%LOCALAPPDATA%\Programs\Dociler\bin` on Windows).
+It never installs Docker, Python, Ollama, model weights, or system-wide services.
 
-The installer is not implemented yet. Developers can run the CLI foundation:
+### macOS and Linux
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/deanyouknow/Dociler/main/install.sh | sh
+```
+
+Or run `install.sh` locally:
+```sh
+./install.sh --help
+./install.sh --dry-run
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/deanyouknow/Dociler/main/install.ps1 | iex
+```
+
+Or run `install.ps1` locally:
+```powershell
+.\install.ps1 -Help
+.\install.ps1 -DryRun
+```
+
+Developers can run the CLI from source:
 
 ```sh
 cargo run --locked -- --help
